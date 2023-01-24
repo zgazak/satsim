@@ -58,232 +58,6 @@ from satsim import time
 logger = logging.getLogger(__name__)
 
 
-def gen_hyper(
-    ssp,
-    eager=True,
-    output_dir="./",
-    input_dir="./",
-    device=None,
-    memory=None,
-    pid=0,
-    output_debug=False,
-):
-    """Generates multiple sets of images. Number of sets is based on the
-    parameters `ssp['sim']['samples']`.
-
-    Examples::
-
-        # load a template json file
-        ssp = load_json('input/config.json')
-
-        # edit some parameters
-        ssp['sim']['samples'] = 50
-        ssp['geometry']['obs']['list']['mv'] = 17.5
-
-        # generate SatNet files to the output directory
-        gen_multi(ssp, eager=True, output_dir='output/')
-
-    Args:
-        ssp: `dict`, static or dynamic satsim configuration and parameters.
-        eager: `boolean`, Has no effect. `True` only.
-        output_dir: `str`, output directory to save SatNet files.
-        input_dir: `str`, typically the input directory of the configuration file.
-        device: `array`, array of GPU device IDs to enable. If `None`, enable all.
-        pid: `int`, an ID to associate this instance to.
-        output_debug: `boolean`, output intermediate debug files.
-    """
-    if eager:
-        configure_eager()
-
-    if device is not None:
-        logger.info(
-            "Starting process id {} on GPU {} with {} MB.".format(
-                pid, device, memory if memory is not None else "MAX"
-            )
-        )
-        configure_single_gpu(device, memory)
-
-    queue = MultithreadedTaskQueue()
-
-    n = ssp["sim"]["samples"] if "samples" in ssp["sim"] else 1
-
-    for set_num in range(n):
-
-        tic("gen_set", set_num)
-
-        logger.info(
-            "Generating set {} of {} on process {}.".format(set_num + 1, n, pid)
-        )
-
-        # transform the original satsim parameters (eval any random sampling)
-        # do a deep copy to preserve the original configuration
-        tssp, issp = transform(copy.deepcopy(ssp), input_dir, with_debug=True)
-
-        # run the transformed parameters
-        dir_name = gen_hyper_images(
-            tssp, eager, output_dir, set_num, queue=queue, output_debug=output_debug
-        )
-
-        # save intermediate transforms
-        save_debug(issp, dir_name)
-
-        logger.info(
-            "Finished set {} of {} in {} sec on process {}.".format(
-                set_num + 1, n, toc("gen_set", set_num), pid
-            )
-        )
-
-    queue.stop()
-    queue.waitUntilEmpty()
-    logger.info("SatSim process {} exiting.".format(pid))
-
-
-def gen_hyper_images(
-    ssp,
-    eager=True,
-    output_dir="./",
-    sample_num=0,
-    output_debug=False,
-    queue=None,
-    set_name=None,
-):
-    """Generates a single set of images.
-
-    Examples::
-
-        # load a template json file
-        ssp = load_json('input/config.json')
-        ssp = transform(copy.deepcopy(ssp), 'input/')
-
-        # generate SatNet files to the output directory
-        gen_images(ssp, eager=True, output_dir='output/')
-
-    Args:
-        ssp: `dict`, static satsim configuration and parameters. Any dynamic
-            parameters should already be transformed.
-        eager: `boolean`, Has no effect. `True` only.
-        output_dir: `str`, output directory to save SatNet files.
-        sample_num: `int`, recorded to annotation files.
-        output_debug: `boolean`, output intermediate debug files.
-        queue: `MultithreadedTaskQueue`, if not None, files will be written.
-        set_name: `str`, sets the directory name to save the images to, if None, is set to current time.
-
-    Returns:
-        A `str`, directory to where the output files are saved.
-    """
-    ssp_orig = copy.deepcopy(ssp)
-
-    (
-        num_frames,
-        exposure_time,
-        h_fpa_os,
-        w_fpa_os,
-        s_osf,
-        y_ifov,
-        x_ifov,
-        a2d_dtype,
-    ) = _parse_sensor_params(ssp)
-
-    dt = datetime.now()
-    if set_name is None:
-        dir_name = os.path.join(output_dir, dt.isoformat().replace(":", "-"))
-        set_name = "sat_{:05d}".format(sample_num)
-
-    # make output dirs
-    os.makedirs(dir_name, exist_ok=True)
-    dir_debug = os.path.join(dir_name, "Debug")
-    if output_debug and not os.path.exists(dir_debug):
-        os.makedirs(dir_debug, exist_ok=True)
-
-    # init annotations
-    meta_data = init_annotation(
-        "dir.name",
-        ["{}.{:04d}.json".format(set_name, x) for x in range(num_frames)],
-        ssp["fpa"]["height"],
-        ssp["fpa"]["width"],
-        y_ifov,
-        x_ifov,
-    )
-
-    for (
-        fpa_digital,
-        frame_num,
-        astrometrics,
-        obs_os_pix,
-        fpa_conv_star,
-        fpa_conv_targ,
-        bg_tf,
-        dc_tf,
-        rn_tf,
-        num_shot_noise_samples,
-        segmentation_array,
-    ) in image_generator(
-        ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
-    ):
-
-        snr = signal_to_noise_ratio(fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf)
-        if num_shot_noise_samples is not None:
-            snr = snr * np.sqrt(num_shot_noise_samples)
-        meta_data = set_frame_annotation(
-            meta_data,
-            frame_num,
-            h_fpa_os,
-            w_fpa_os,
-            obs_os_pix,
-            [20 * s_osf, 20 * s_osf],
-            snr=snr,
-        )
-        if queue is not None:
-            queue.task(
-                write_frame,
-                {
-                    "dir_name": dir_name,
-                    "sat_name": set_name,
-                    "fpa_digital": fpa_digital.numpy(),
-                    "meta_data": copy.deepcopy(meta_data),
-                    "frame_num": frame_num,
-                    "exposure_time": exposure_time,
-                    "time_stamp": dt,
-                    "ssp": ssp_orig,
-                    "show_obs_boxes": ssp["sim"]["show_obs_boxes"],
-                    "astrometrics": astrometrics.copy(),
-                    "save_pickle": ssp["sim"]["save_pickle"],
-                    "dtype": a2d_dtype,
-                    "save_jpeg": ssp["sim"]["save_jpeg"],
-                },
-                tag=dir_name,
-            )
-        if output_debug:
-            with open(
-                os.path.join(dir_debug, "metadata_{}.json".format(frame_num)), "w"
-            ) as jsonfile:
-                json.dump(meta_data, jsonfile, indent=2)
-
-        logger.debug(
-            "Finished frame {} of {} in {} sec.".format(
-                frame_num + 1, num_frames, toc("gen_frame", frame_num)
-            )
-        )
-
-    # write movie
-    def wait_and_run():
-        while True:
-            if queue.has_tag(dir_name):
-                sleep(0.1)
-            else:
-                if ssp["sim"]["save_movie"]:
-                    save_apng(
-                        dirname=os.path.join(dir_name, "AnnotatedImages"),
-                        filename="movie.png",
-                    )
-                return
-
-    if queue is not None:
-        queue.task(wait_and_run, {})
-
-    return dir_name
-
-
 def gen_multi(
     ssp,
     eager=True,
@@ -304,7 +78,7 @@ def gen_multi(
 
         # edit some parameters
         ssp['sim']['samples'] = 50
-        ssp['geometry']['obs']['list']['mv'] = 17.5
+        ssp['geometryzs']['obs']['list']['mv'] = 17.5
 
         # generate SatNet files to the output directory
         gen_multi(ssp, eager=True, output_dir='output/')
@@ -319,8 +93,6 @@ def gen_multi(
         output_debug: `boolean`, output intermediate debug files.
     """
 
-    print("hello")
-    return
     if eager:
         configure_eager()
 
@@ -347,6 +119,15 @@ def gen_multi(
         # transform the original satsim parameters (eval any random sampling)
         # do a deep copy to preserve the original configuration
         tssp, issp = transform(copy.deepcopy(ssp), input_dir, with_debug=True)
+
+        # reinsert hyperspectral filters
+        for idx in range(len(tssp["geometry"]["obs"]["list"])):
+            tssp["geometry"]["obs"]["list"][idx]["hypermags"] = ssp["geometry"]["obs"][
+                "list"
+            ]["hypermags"][idx]
+            tssp["geometry"]["obs"]["list"][idx]["annotation"] = ssp["geometry"]["obs"][
+                "list"
+            ]["annotations"][idx]
 
         # run the transformed parameters
         dir_name = gen_images(
@@ -415,7 +196,10 @@ def gen_images(
 
     dt = datetime.now()
     if set_name is None:
-        dir_name = os.path.join(output_dir, dt.isoformat().replace(":", "-"))
+        outpath = ssp["spectral"].get("outpath", None)
+        dir_name = os.path.join(
+            output_dir, dt.isoformat().replace(":", "-") if outpath is None else outpath
+        )
         set_name = "sat_{:05d}".format(sample_num)
 
     # make output dirs
@@ -445,20 +229,27 @@ def gen_images(
         dc_tf,
         rn_tf,
         num_shot_noise_samples,
+        seg_array,
+        star_boxes,
+        FWHM,
     ) in image_generator(
         ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
     ):
+
         snr = signal_to_noise_ratio(fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf)
         if num_shot_noise_samples is not None:
             snr = snr * np.sqrt(num_shot_noise_samples)
+
         meta_data = set_frame_annotation(
             meta_data,
             frame_num,
             h_fpa_os,
             w_fpa_os,
             obs_os_pix,
-            [20 * s_osf, 20 * s_osf],
+            box_size=[2 * FWHM, 2 * FWHM],
             snr=snr,
+            obs_annot=ssp["geometry"]["obs"]["list"],
+            star_annot=star_boxes,
         )
         if queue is not None:
             queue.task(
@@ -473,10 +264,12 @@ def gen_images(
                     "time_stamp": dt,
                     "ssp": ssp_orig,
                     "show_obs_boxes": ssp["sim"]["show_obs_boxes"],
+                    "show_star_boxes": ssp["sim"]["show_star_boxes"],
                     "astrometrics": astrometrics.copy(),
                     "save_pickle": ssp["sim"]["save_pickle"],
                     "dtype": a2d_dtype,
                     "save_jpeg": ssp["sim"]["save_jpeg"],
+                    "seg_map": seg_array.numpy(),
                 },
                 tag=dir_name,
             )
@@ -501,6 +294,14 @@ def gen_images(
                 if ssp["sim"]["save_movie"]:
                     save_apng(
                         dirname=os.path.join(dir_name, "AnnotatedImages"),
+                        filename="movie.png",
+                    )
+                    save_apng(
+                        dirname=os.path.join(dir_name, "AnnotatedImagesCube"),
+                        filename="movie.png",
+                    )
+                    save_apng(
+                        dirname=os.path.join(dir_name, "AnnotatedImagesStars"),
                         filename="movie.png",
                     )
                 return
@@ -1003,6 +804,7 @@ def image_generator(
         elif ssp["fpa"]["psf"]["mode"] == "gaussian":
             eod = ssp["fpa"]["psf"]["eod"]
             sigma = eod_to_sigma(eod, s_osf)
+            FWHM = 1 + (2.355 * sigma / s_osf)
             psf_os = gen_gaussian(h_sub_pad_os, w_sub_pad_os, sigma)
             save_cache(ssp["fpa"]["psf"], psf_os)
         elif ssp["fpa"]["psf"]["mode"] == "poppy":
@@ -1017,6 +819,10 @@ def image_generator(
             save_cache(ssp["fpa"]["psf"], psf_os)
             psf_os = tf.cast(psf_os, tf.float32)
 
+        # calculate FWHM of PSF
+        # centers = np.where(psf_os.numpy() == psf_os.numpy().max())
+        # center = [centers[0][0], centers[1][0]]
+
         if pydash.objects.has(ssp, "augment.background.stray"):
             bg = ssp["augment"]["background"]["stray"](bg)
             bg = tf.cast(bg, tf.float32)
@@ -1028,6 +834,7 @@ def image_generator(
 
         obs_cache = [None] * len(obs)
 
+        # zach, do one per class collection for annotations?
         def gen_objects(obs, t_start, t_end):
             """Generate object pixels. TODO move to submodule"""
             obs_model = []
@@ -1065,13 +872,15 @@ def image_generator(
                                 o.update(eu["values"])
                                 updated = True
 
-                if "mv" in o:
-                    ope = mv_to_pe(zeropoint, o["mv"]) if not callable(o["mv"]) else 0.0
+                if "m_v" in o:
+                    ope = (
+                        mv_to_pe(zeropoint, o["m_v"]) if not callable(o["m_v"]) else 0.0
+                    )
                     pe_func = (
                         (lambda x, t: x)
-                        if not callable(o["mv"])
+                        if not callable(o["m_v"])
                         else (
-                            lambda x, t: mv_to_pe(zeropoint, o["mv"](x, t))
+                            lambda x, t: mv_to_pe(zeropoint, o["m_v"](x, t))
                             * _delta_t(t)
                         )
                     )
@@ -1301,7 +1110,6 @@ def image_generator(
                         "pe": avg_pe,
                     }
                 )
-
             return orrr, occc, oppp, obs_os_pix, obs_model
 
         if True:  # TODO remove eager
@@ -1317,6 +1125,7 @@ def image_generator(
                 logger.debug(
                     "Generating frame {} of {}.".format(frame_num + 1, num_frames)
                 )
+
                 astrometrics["frame_num"] = frame_num + 1
 
                 t_start = frame_num * frame_time
@@ -1326,249 +1135,303 @@ def image_generator(
                 t_start_star = t_start
                 t_end_star = t_end
 
-                # refresh catalog stars
-                # TODO should save stars and transform to FPA again on every frame
-                if star_mode == "sstr7" and (
-                    ssp["sim"]["star_catalog_query_mode"] == "frame" or frame_num == 0
-                ):
-                    if track_mode is not None:
-                        (
+                hypermags = ssp["geometry"]["obs"]["list"][0].get("hypermags", [])
+                filters = ssp["spectral"]["filter_centers"]
+
+                fpas = []
+                segs = []
+                for idx, (m_v, center_nm) in enumerate(zip(hypermags, filters)):
+
+                    logger.debug(
+                        "Generating filter {} of {}. Mag {}".format(
+                            idx, len(hypermags), m_v
+                        )
+                    )
+
+                    for obj_idx in range(len(ssp["geometry"]["obs"]["list"])):
+                        ssp["geometry"]["obs"]["list"][obj_idx]["m_v"] = ssp[
+                            "geometry"
+                        ]["obs"]["list"][obj_idx]["hypermags"][idx]
+
+                    # refresh catalog stars
+                    # TODO should save stars and transform to FPA again on every frame
+                    if star_mode == "sstr7" and (
+                        ssp["sim"]["star_catalog_query_mode"] == "frame"
+                        or frame_num == 0
+                    ):
+                        if track_mode is not None:
+                            (
+                                star_ra,
+                                star_dec,
+                                star_tran_os,
+                                star_rot_rate,
+                            ) = calculate_star_position_and_motion(
+                                ts_start, ts_end, star_rot, track_mode
+                            )
+                        # this needs to change, ZACH.  supply desired filter?
+                        r_stars_os, c_stars_os, m_stars_os = query_by_los(
+                            h_fpa_pad_os,
+                            w_fpa_pad_os,
+                            y_fov_pad,
+                            x_fov_pad,
                             star_ra,
                             star_dec,
-                            star_tran_os,
+                            rot=star_rot,
+                            rootPath=star_path,
+                            pad_mult=star_pad,
+                            flipud=ssp["fpa"]["flip_up_down"],
+                            fliplr=ssp["fpa"]["flip_left_right"],
+                            filter_center=center_nm,
+                        )
+                        pe_stars_os = mv_to_pe(zeropoint, m_stars_os) * exposure_time
+                        t_start_star = 0.0
+                        t_end_star = exposure_time
+                        if ssp["sim"]["star_catalog_query_mode"] == "frame":
+                            ssp["sim"]["apply_star_wrap_around"] = False
+
+                    # wrap stars around
+                    if ssp["sim"]["apply_star_wrap_around"]:
+                        r_stars_os, c_stars_os, star_bounds = apply_wrap_around(
+                            h_fpa_pad_os,
+                            w_fpa_pad_os,
+                            r_stars_os,
+                            c_stars_os,
+                            t_start,
+                            t_end,
                             star_rot_rate,
-                        ) = calculate_star_position_and_motion(
-                            ts_start, ts_end, star_rot, track_mode
+                            star_tran_os,
+                            star_bounds,
                         )
-                    r_stars_os, c_stars_os, m_stars_os = query_by_los(
-                        h_fpa_pad_os,
-                        w_fpa_pad_os,
-                        y_fov_pad,
-                        x_fov_pad,
-                        star_ra,
-                        star_dec,
-                        rot=star_rot,
-                        rootPath=star_path,
-                        pad_mult=star_pad,
-                        flipud=ssp["fpa"]["flip_up_down"],
-                        fliplr=ssp["fpa"]["flip_left_right"],
+
+                    logger.debug("Number of stars {}.".format(len(r_stars_os)))
+                    t_start_star = tf.cast(t_start_star, tf.float32)
+                    t_end_star = tf.cast(t_end_star, tf.float32)
+                    r_stars_os = tf.cast(r_stars_os, tf.float32)
+                    c_stars_os = tf.cast(c_stars_os, tf.float32)
+                    pe_stars_os = tf.cast(pe_stars_os, tf.float32)
+
+                    # calculate object pixels
+                    r_obs_os, c_obs_os, pe_obs_os, obs_os_pix, obs_model = gen_objects(
+                        obs, t_start, t_end
                     )
-                    pe_stars_os = mv_to_pe(zeropoint, m_stars_os) * exposure_time
-                    t_start_star = 0.0
-                    t_end_star = exposure_time
-                    if ssp["sim"]["star_catalog_query_mode"] == "frame":
-                        ssp["sim"]["apply_star_wrap_around"] = False
+                    logger.debug("Number of objects {}.".format(len(obs_os_pix)))
+                    r_obs_os = tf.cast(r_obs_os, tf.float32)
+                    c_obs_os = tf.cast(c_obs_os, tf.float32)
+                    pe_obs_os = tf.cast(pe_obs_os, tf.float32)
 
-                # wrap stars around
-                if ssp["sim"]["apply_star_wrap_around"]:
-                    r_stars_os, c_stars_os, star_bounds = apply_wrap_around(
-                        h_fpa_pad_os,
-                        w_fpa_pad_os,
-                        r_stars_os,
-                        c_stars_os,
-                        t_start,
-                        t_end,
-                        star_rot_rate,
-                        star_tran_os,
-                        star_bounds,
-                    )
-
-                logger.debug("Number of stars {}.".format(len(r_stars_os)))
-                t_start_star = tf.cast(t_start_star, tf.float32)
-                t_end_star = tf.cast(t_end_star, tf.float32)
-                r_stars_os = tf.cast(r_stars_os, tf.float32)
-                c_stars_os = tf.cast(c_stars_os, tf.float32)
-                pe_stars_os = tf.cast(pe_stars_os, tf.float32)
-
-                # calculate object pixels
-                r_obs_os, c_obs_os, pe_obs_os, obs_os_pix, obs_model = gen_objects(
-                    obs, t_start, t_end
-                )
-                logger.debug("Number of objects {}.".format(len(obs_os_pix)))
-                r_obs_os = tf.cast(r_obs_os, tf.float32)
-                c_obs_os = tf.cast(c_obs_os, tf.float32)
-                pe_obs_os = tf.cast(pe_obs_os, tf.float32)
-
-                # augment TODO abstract this
-                if pydash.objects.has(ssp, "augment.fpa.psf"):
-                    psf_os_curr = ssp["augment"]["fpa"]["psf"](psf_os)
-                    psf_os_curr = tf.cast(psf_os_curr, tf.float32)
-                else:
-                    psf_os_curr = psf_os
-
-                # render
-                if render_mode == "piecewise":
-                    (
-                        fpa_conv_star,
-                        fpa_conv_targ,
-                        fpa_os_w_targets,
-                        fpa_conv_os,
-                        fpa_conv_crop,
-                    ) = render_piecewise(
-                        h,
-                        w,
-                        h_sub,
-                        w_sub,
-                        h_pad_os,
-                        w_pad_os,
-                        s_osf,
-                        psf_os_curr,
-                        r_obs_os,
-                        c_obs_os,
-                        pe_obs_os,
-                        r_stars_os,
-                        c_stars_os,
-                        pe_stars_os,
-                        t_start_star,
-                        t_end_star,
-                        t_osf,
-                        star_rot_rate,
-                        star_tran_os,
-                        render_separate=ssp["sim"]["calculate_snr"],
-                        star_render_mode=ssp["sim"]["star_render_mode"],
-                    )
-                else:
-                    (
-                        fpa_conv_star,
-                        fpa_conv_targ,
-                        fpa_os_w_targets,
-                        fpa_conv_os,
-                        fpa_conv_crop,
-                    ) = render_full(
-                        h_fpa_os,
-                        w_fpa_os,
-                        h_fpa_pad_os,
-                        w_fpa_pad_os,
-                        h_pad_os_div2,
-                        w_pad_os_div2,
-                        s_osf,
-                        psf_os_curr,
-                        r_obs_os,
-                        c_obs_os,
-                        pe_obs_os,
-                        r_stars_os,
-                        c_stars_os,
-                        pe_stars_os,
-                        t_start_star,
-                        t_end_star,
-                        t_osf,
-                        star_rot_rate,
-                        star_tran_os,
-                        render_separate=ssp["sim"]["calculate_snr"],
-                        obs_model=obs_model,
-                        star_render_mode=ssp["sim"]["star_render_mode"],
-                    )
-
-                # add noise
-                fpa_conv = (fpa_conv_star + fpa_conv_targ + bg_tf) * gain_tf + dc_tf
-                if ssp["sim"]["enable_shot_noise"] is True:
-                    fpa_conv_noise = add_photon_noise(
-                        fpa_conv, ssp["sim"]["num_shot_noise_samples"]
-                    )
-                else:
-                    fpa_conv_noise = fpa_conv
-                fpa = add_read_noise(fpa_conv_noise, rn, en)
-
-                # analog to digital
-                fpa_digital = analog_to_digital(
-                    fpa + bias_tf, a2d_gain, a2d_fwc, a2d_bias, dtype=a2d_dtype
-                )
-
-                # augment TODO abstract this
-                if pydash.objects.has(ssp, "augment.image"):
-                    if ssp["augment"]["image"]["post"] is None:
-                        pass
-                    elif callable(ssp["augment"]["image"]["post"]):
-                        fpa_digital = ssp["augment"]["image"]["post"](fpa_digital)
+                    # augment TODO abstract this
+                    if pydash.objects.has(ssp, "augment.fpa.psf"):
+                        psf_os_curr = ssp["augment"]["fpa"]["psf"](psf_os)
+                        psf_os_curr = tf.cast(psf_os_curr, tf.float32)
                     else:
-                        fpa_digital = fpa_digital + ssp["augment"]["image"]["post"]
+                        psf_os_curr = psf_os
 
-                if output_debug:
-                    if fpa_os_w_targets is not None:
-                        with open(
-                            os.path.join(
-                                dir_debug, "fpa_os_{}.pickle".format(frame_num)
-                            ),
-                            "wb",
-                        ) as picklefile:
-                            pickle.dump(fpa_os_w_targets.numpy(), picklefile)
-                    if fpa_conv_os is not None:
-                        with open(
-                            os.path.join(
-                                dir_debug, "fpa_conv_os_{}.pickle".format(frame_num)
-                            ),
-                            "wb",
-                        ) as picklefile:
-                            pickle.dump(fpa_conv_os.numpy(), picklefile)
-                    if fpa_conv_crop is not None:
-                        with open(
-                            os.path.join(
-                                dir_debug, "fpa_conv_crop_{}.pickle".format(frame_num)
-                            ),
-                            "wb",
-                        ) as picklefile:
-                            pickle.dump(fpa_conv_crop.numpy(), picklefile)
-                    with open(
-                        os.path.join(
-                            dir_debug, "fpa_conv_star_{}.pickle".format(frame_num)
-                        ),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(fpa_conv_star.numpy(), picklefile)
-                    with open(
-                        os.path.join(
-                            dir_debug, "fpa_conv_targ_{}.pickle".format(frame_num)
-                        ),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(fpa_conv_targ.numpy(), picklefile)
-                    with open(
-                        os.path.join(dir_debug, "fpa_conv_{}.pickle".format(frame_num)),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(fpa_conv.numpy(), picklefile)
-                    with open(
-                        os.path.join(
-                            dir_debug, "fpa_conv_noise_{}.pickle".format(frame_num)
-                        ),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(fpa_conv_noise.numpy(), picklefile)
-                    with open(
-                        os.path.join(dir_debug, "fpa_{}.pickle".format(frame_num)), "wb"
-                    ) as picklefile:
-                        pickle.dump(fpa.numpy(), picklefile)
-                    with open(
-                        os.path.join(
-                            dir_debug, "fpa_digital_{}.pickle".format(frame_num)
-                        ),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(fpa_digital.numpy(), picklefile)
-                    with open(
-                        os.path.join(dir_debug, "stars_os_{}.pickle".format(frame_num)),
-                        "wb",
-                    ) as picklefile:
-                        pickle.dump(
-                            [
-                                r_stars_os.numpy(),
-                                c_stars_os.numpy(),
-                                pe_stars_os.numpy(),
-                                t_start_star,
-                                t_end_star,
-                                t_osf,
-                                star_rot_rate,
-                                star_tran_os,
-                            ],
-                            picklefile,
+                    # render
+                    if render_mode == "piecewise":
+                        (
+                            fpa_conv_star,
+                            fpa_conv_targ,
+                            fpa_os_w_targets,
+                            fpa_conv_os,
+                            fpa_conv_crop,
+                        ) = render_piecewise(
+                            h,
+                            w,
+                            h_sub,
+                            w_sub,
+                            h_pad_os,
+                            w_pad_os,
+                            s_osf,
+                            psf_os_curr,
+                            r_obs_os,
+                            c_obs_os,
+                            pe_obs_os,
+                            r_stars_os,
+                            c_stars_os,
+                            pe_stars_os,
+                            t_start_star,
+                            t_end_star,
+                            t_osf,
+                            star_rot_rate,
+                            star_tran_os,
+                            render_separate=ssp["sim"]["calculate_snr"],
+                            star_render_mode=ssp["sim"]["star_render_mode"],
+                        )
+                    else:
+                        (
+                            fpa_conv_star,
+                            fpa_conv_targ,
+                            fpa_os_w_targets,
+                            fpa_conv_os,
+                            fpa_conv_crop,
+                            star_boxes,
+                        ) = render_full(
+                            h_fpa_os,
+                            w_fpa_os,
+                            h_fpa_pad_os,
+                            w_fpa_pad_os,
+                            h_pad_os_div2,
+                            w_pad_os_div2,
+                            s_osf,
+                            psf_os_curr,
+                            r_obs_os,
+                            c_obs_os,
+                            pe_obs_os,
+                            r_stars_os,
+                            c_stars_os,
+                            pe_stars_os,
+                            t_start_star,
+                            t_end_star,
+                            t_osf,
+                            star_rot_rate,
+                            star_tran_os,
+                            render_separate=ssp["sim"]["calculate_snr"],
+                            obs_model=obs_model,
+                            star_render_mode=ssp["sim"]["star_render_mode"],
                         )
 
-                print("oh hello")
+                    # add FWHM to star boxes ...:
+                    # shift x, y by half, extend width and height by full
+                    star_box_shift = 2 * FWHM * np.array([-0.5, -0.5, 1, 1])
+
+                    star_boxes = [
+                        list(np.array(box) + star_box_shift.round())
+                        for box in star_boxes
+                    ]
+
+                    # add noise
+                    fpa_conv = (
+                        fpa_conv_star + tf.math.add_n(fpa_conv_targ) + bg_tf
+                    ) * gain_tf + dc_tf
+                    if ssp["sim"]["enable_shot_noise"] is True:
+                        fpa_conv_noise = add_photon_noise(
+                            fpa_conv, ssp["sim"]["num_shot_noise_samples"]
+                        )
+                    else:
+                        fpa_conv_noise = fpa_conv
+                    fpa = add_read_noise(fpa_conv_noise, rn, en)
+
+                    # analog to digital
+                    fpa_digital = analog_to_digital(
+                        fpa + bias_tf, a2d_gain, a2d_fwc, a2d_bias, dtype=a2d_dtype
+                    )
+
+                    # augment TODO abstract this
+                    if pydash.objects.has(ssp, "augment.image"):
+                        if ssp["augment"]["image"]["post"] is None:
+                            pass
+                        elif callable(ssp["augment"]["image"]["post"]):
+                            fpa_digital = ssp["augment"]["image"]["post"](fpa_digital)
+                        else:
+                            fpa_digital = fpa_digital + ssp["augment"]["image"]["post"]
+
+                    if output_debug:
+                        if fpa_os_w_targets is not None:
+                            with open(
+                                os.path.join(
+                                    dir_debug, "fpa_os_{}.pickle".format(frame_num)
+                                ),
+                                "wb",
+                            ) as picklefile:
+                                pickle.dump(fpa_os_w_targets.numpy(), picklefile)
+                        if fpa_conv_os is not None:
+                            with open(
+                                os.path.join(
+                                    dir_debug, "fpa_conv_os_{}.pickle".format(frame_num)
+                                ),
+                                "wb",
+                            ) as picklefile:
+                                pickle.dump(fpa_conv_os.numpy(), picklefile)
+                        if fpa_conv_crop is not None:
+                            with open(
+                                os.path.join(
+                                    dir_debug,
+                                    "fpa_conv_crop_{}.pickle".format(frame_num),
+                                ),
+                                "wb",
+                            ) as picklefile:
+                                pickle.dump(fpa_conv_crop.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "fpa_conv_star_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa_conv_star.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "fpa_conv_targ_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa_conv_targ.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "fpa_conv_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa_conv.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "fpa_conv_noise_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa_conv_noise.numpy(), picklefile)
+                        with open(
+                            os.path.join(dir_debug, "fpa_{}.pickle".format(frame_num)),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "fpa_digital_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(fpa_digital.numpy(), picklefile)
+                        with open(
+                            os.path.join(
+                                dir_debug, "stars_os_{}.pickle".format(frame_num)
+                            ),
+                            "wb",
+                        ) as picklefile:
+                            pickle.dump(
+                                [
+                                    r_stars_os.numpy(),
+                                    c_stars_os.numpy(),
+                                    pe_stars_os.numpy(),
+                                    t_start_star,
+                                    t_end_star,
+                                    t_osf,
+                                    star_rot_rate,
+                                    star_tran_os,
+                                ],
+                                picklefile,
+                            )
+
+                    seg_list = [
+                        fpa - (fpa_conv_star + tf.math.add_n(fpa_conv_targ)) * gain_tf,
+                        fpa_conv_star * gain_tf,
+                    ] + [fpa * gain_tf for fpa in fpa_conv_targ]
+
+                    seg_arr = tf.math.round(tf.stack(seg_list))
+                    seg_arr = tf.math.divide(seg_arr, tf.reduce_sum(seg_arr, 0))
+                    seg_arr = tf.transpose(seg_arr, perm=[1, 2, 0])
+
+                    fpas.append(fpa_digital)
+                    segs.append(seg_arr)
+                    # indent to here
+
+                fpa_digital = tf.stack(fpas, 2)
+                seg_arr = tf.stack(segs, 3)
                 if with_meta:
+
                     yield fpa_digital, frame_num, astrometrics, obs_os_pix, fpa_conv_star, fpa_conv_targ, bg_tf, dc_tf, rn_tf, ssp[
                         "sim"
                     ][
                         "num_shot_noise_samples"
-                    ]
+                    ], seg_arr, star_boxes, FWHM
                 else:
                     yield fpa_digital

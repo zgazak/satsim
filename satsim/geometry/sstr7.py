@@ -7,7 +7,11 @@ import numpy as np
 
 from satsim.geometry.wcs import get_min_max_ra_dec
 
-DEFAULT_SSTR7_PATH = os.environ['SATSIM_SSTR7_PATH'] if 'SATSIM_SSTR7_PATH' in os.environ else '/workspace/share/sstrc7'
+DEFAULT_SSTR7_PATH = (
+    os.environ["SATSIM_SSTR7_PATH"]
+    if "SATSIM_SSTR7_PATH" in os.environ
+    else "/workspace/share/sstrc7"
+)
 RECORD_LEN = 30
 RECORD_LEN_BYTES = RECORD_LEN * 2
 
@@ -28,20 +32,22 @@ def load_index(filename, numRaZones=60, numDecZones=1800):
         A `list`, list of dictionaries with zone position and length
     """
 
-    zoneIndex =  [[{}] * numRaZones for i in range(numDecZones)]
+    zoneIndex = [[{}] * numRaZones for i in range(numDecZones)]
 
-    with open(filename, mode='rb') as f:
-        data = np.fromfile(f, dtype=np.dtype('<u4'))
+    with open(filename, mode="rb") as f:
+        data = np.fromfile(f, dtype=np.dtype("<u4"))
         i = 0
         for decIndex in range(numDecZones):
             for raIndex in range(numRaZones):
-                zoneIndex[decIndex][raIndex] = {'pos': data[i], 'length': data[i + 1]}
+                zoneIndex[decIndex][raIndex] = {"pos": data[i], "length": data[i + 1]}
                 i = i + 2
 
     return zoneIndex
 
 
-def select_zone(ra_min, ra_max, dec_min, dec_max, zoneIndex, numRaZones=60, numDecZones=1800):
+def select_zone(
+    ra_min, ra_max, dec_min, dec_max, zoneIndex, numRaZones=60, numDecZones=1800
+):
     """Select a list of regions that intersect with the rectangular coordinate
     bounds
 
@@ -81,18 +87,26 @@ def select_zone(ra_min, ra_max, dec_min, dec_max, zoneIndex, numRaZones=60, numD
         for spd in range(minSPDIndex, maxSPDIndex + 1):
             for ra in range(minRAIndex, maxRAIndex + 1):
                 selectZone = {
-                    'id': int(spd),
-                    'pos': zoneIndex[spd][ra]['pos'],
-                    'length': zoneIndex[spd][ra]['length']
+                    "id": int(spd),
+                    "pos": zoneIndex[spd][ra]["pos"],
+                    "length": zoneIndex[spd][ra]["length"],
                 }
                 if bound_func == 0:
-                    selectZone['bound'] = 'maxRA' if ((ra + 1) * zoneWidth > ra_max) else ('minRA' if (ra * zoneWidth < ra_min) else 'inside')
+                    selectZone["bound"] = (
+                        "maxRA"
+                        if ((ra + 1) * zoneWidth > ra_max)
+                        else ("minRA" if (ra * zoneWidth < ra_min) else "inside")
+                    )
                 elif bound_func == 1:
-                    selectZone['bound'] = 'minRA' if (ra * zoneWidth < ra_max) else 'inside'
+                    selectZone["bound"] = (
+                        "minRA" if (ra * zoneWidth < ra_max) else "inside"
+                    )
                 elif bound_func == 2:
-                    selectZone['bound'] = 'maxRA' if (ra * zoneWidth > ra_min) else 'inside'
+                    selectZone["bound"] = (
+                        "maxRA" if (ra * zoneWidth > ra_min) else "inside"
+                    )
 
-                if selectZone['length'] > 0:
+                if selectZone["length"] > 0:
                     selectZoneList.append(selectZone)
 
     # Check to see if catalog search bounds crosses 0 deg Right Ascension and
@@ -123,16 +137,16 @@ def load_zone(currentZone, rootPath):
     """
     # Next, assure the proper zone catalog file is opened. Seek to the proper
     # file offset and read the entire zone region into the zone buffer
-    filename = os.path.join(rootPath, 's{:04d}.cat'.format(currentZone['id']))
+    filename = os.path.join(rootPath, "s{:04d}.cat".format(currentZone["id"]))
 
-    with open(filename, 'rb') as file:
+    with open(filename, "rb") as file:
 
-        zoneBufferFilePos = currentZone['pos']
+        zoneBufferFilePos = currentZone["pos"]
         zoneBufferOffset = zoneBufferFilePos * RECORD_LEN_BYTES
         file.seek(zoneBufferOffset)
 
         # Read the region star data into memory
-        zoneBufferLen = currentZone['length'] * RECORD_LEN_BYTES
+        zoneBufferLen = currentZone["length"] * RECORD_LEN_BYTES
         zoneBuffer = file.read(zoneBufferLen)
 
         zoneBufferPos = zoneBufferOffset
@@ -142,21 +156,31 @@ def load_zone(currentZone, rootPath):
 
 
 @lru_cache(maxsize=1024)
-def load_stars_for_zone(id, pos, length, bound, rootPath):  # ra_min, ra_max):
-    """Load stars for specified zone.
-    """
+def load_stars_for_zone(
+    id, pos, length, bound, rootPath, filter_center=None
+):  # ra_min, ra_max):
+    """Load stars for specified zone."""
     buffer, start, end = load_zone({"id": id, "pos": pos, "length": length}, rootPath)
     stars = []
-    if bound == 'minRA':
-        for s in [i * RECORD_LEN_BYTES for i in reversed(range((end - start) // RECORD_LEN_BYTES))]:
-            star = read_star(buffer[s:s + RECORD_LEN_BYTES])
+    if bound == "minRA":
+        for s in [
+            i * RECORD_LEN_BYTES
+            for i in reversed(range((end - start) // RECORD_LEN_BYTES))
+        ]:
+            star = read_star(
+                buffer[s : s + RECORD_LEN_BYTES], filter_center=filter_center
+            )
             stars.append(star)
             # if star['ra'] < ra_min:
             #     print('load minRA:', len(stars))
             #     break
     else:
-        for s in [i * RECORD_LEN_BYTES for i in range((end - start) // RECORD_LEN_BYTES)]:
-            star = read_star(buffer[s:s + RECORD_LEN_BYTES])
+        for s in [
+            i * RECORD_LEN_BYTES for i in range((end - start) // RECORD_LEN_BYTES)
+        ]:
+            star = read_star(
+                buffer[s : s + RECORD_LEN_BYTES], filter_center=filter_center
+            )
             stars.append(star)
             # if bound == 'maxRA' and star['ra'] > ra_max:
             #     print('load maxRA:', len(stars))
@@ -165,8 +189,22 @@ def load_stars_for_zone(id, pos, length, bound, rootPath):  # ra_min, ra_max):
     return stars
 
 
-def query_by_los(height, width, y_fov, x_fov, ra, dec, rot=0, rootPath=DEFAULT_SSTR7_PATH, pad_mult=0,
-                 origin='center', filter_ob=True, flipud=False, fliplr=False):
+def query_by_los(
+    height,
+    width,
+    y_fov,
+    x_fov,
+    ra,
+    dec,
+    rot=0,
+    rootPath=DEFAULT_SSTR7_PATH,
+    pad_mult=0,
+    origin="center",
+    filter_ob=True,
+    flipud=False,
+    fliplr=False,
+    filter_center=None,
+):
     """Query the catalog based on focal plane parameters and ra and dec line
     of sight vector. Line of sight vector is defined as the top left corner
     of the focal plane array.
@@ -194,16 +232,19 @@ def query_by_los(height, width, y_fov, x_fov, ra, dec, rot=0, rootPath=DEFAULT_S
             mv: `list`, list of visual magnitudes
     """
 
-    cmin, cmax, w = get_min_max_ra_dec(height, width, y_fov / height, x_fov / width, ra, dec, rot, pad_mult, origin)
+    cmin, cmax, w = get_min_max_ra_dec(
+        height, width, y_fov / height, x_fov / width, ra, dec, rot, pad_mult, origin
+    )
 
     cmin = np.radians(cmin)
     cmax = np.radians(cmax)
+    stars = query_by_min_max(
+        cmin[0], cmax[0], cmin[1], cmax[1], rootPath, filter_center=filter_center
+    )
 
-    stars = query_by_min_max(cmin[0], cmax[0], cmin[1], cmax[1], rootPath)
-
-    rra = np.array([s['ra'] for s in stars])
-    ddec = np.array([s['dec'] for s in stars])
-    mm = np.array([s['mv'] for s in stars])
+    rra = np.array([s["ra"] for s in stars])
+    ddec = np.array([s["dec"] for s in stars])
+    mm = np.array([s["mv"] for s in stars])
 
     cc, rr = w.wcs_world2pix(np.degrees(rra), np.degrees(ddec), 0)
 
@@ -215,7 +256,7 @@ def query_by_los(height, width, y_fov, x_fov, ra, dec, rot=0, rootPath=DEFAULT_S
         cc = cc[in_bounds]
         mm = mm[in_bounds]
 
-    if origin == 'center':
+    if origin == "center":
         rr += height / 2.0
         cc += width / 2.0
 
@@ -228,7 +269,15 @@ def query_by_los(height, width, y_fov, x_fov, ra, dec, rot=0, rootPath=DEFAULT_S
     return rr, cc, mm
 
 
-def query_by_min_max(ra_min, ra_max, dec_min, dec_max, rootPath=DEFAULT_SSTR7_PATH, clip_min_max=True):
+def query_by_min_max(
+    ra_min,
+    ra_max,
+    dec_min,
+    dec_max,
+    rootPath=DEFAULT_SSTR7_PATH,
+    clip_min_max=True,
+    filter_center=None,
+):
     """Query the catalog based on focal plane parameters and minimum and
     maximum right ascension and declination.
 
@@ -245,9 +294,13 @@ def query_by_min_max(ra_min, ra_max, dec_min, dec_max, rootPath=DEFAULT_SSTR7_PA
         A `list`, stars within the bounds of input parameters
     """
 
-    zoneIndex = load_index(os.path.join(rootPath, 'sstrc.acc'), numRaZones=60, numDecZones=1800)
+    zoneIndex = load_index(
+        os.path.join(rootPath, "sstrc.acc"), numRaZones=60, numDecZones=1800
+    )
 
-    zones = select_zone(ra_min, ra_max, dec_min, dec_max, zoneIndex, numRaZones=60, numDecZones=1800)
+    zones = select_zone(
+        ra_min, ra_max, dec_min, dec_max, zoneIndex, numRaZones=60, numDecZones=1800
+    )
 
     stars = []
     for z in zones:
@@ -256,20 +309,21 @@ def query_by_min_max(ra_min, ra_max, dec_min, dec_max, rootPath=DEFAULT_SSTR7_PA
             z["pos"],
             z["length"],
             z["bound"],
-            rootPath
+            rootPath,
+            filter_center=filter_center,
         )
 
         if clip_min_max:
 
             def clip_stars():
-                if z['bound'] == 'minRA':
+                if z["bound"] == "minRA":
                     for i in range(len(ss)):
-                        if ss[i]['ra'] < ra_min:
+                        if ss[i]["ra"] < ra_min:
                             return ss[0:i]
                 else:
                     # break for `maxRA` and not `inside`
                     for i in range(len(ss)):
-                        if z['bound'] == 'maxRA' and ss[i]['ra'] > ra_max:
+                        if z["bound"] == "maxRA" and ss[i]["ra"] > ra_max:
                             return ss[0:i]
                 return ss
 
@@ -280,7 +334,7 @@ def query_by_min_max(ra_min, ra_max, dec_min, dec_max, rootPath=DEFAULT_SSTR7_PA
     return stars
 
 
-def read_star(buffer):
+def read_star(buffer, filter_center=None):
     """Reads a byte buffer and parses star parameters.
 
     Args:
@@ -298,20 +352,59 @@ def read_star(buffer):
     parallaxScale = 0.032 * milliarcsec
 
     raw = []
-    raw = struct.unpack('=iihhh', buffer[0:14])
+    raw = struct.unpack("=iihhh", buffer[0:14])
 
+    # zach, expand with additional filter magnitudes
     raw_mv = []
-    raw_mv = struct.unpack('=hhhhhhhhhhhhhhhhhh', buffer[14:14 + 18 * 2])
+    raw_mv = struct.unpack("=hhhhhhhhhhhhhhhhhh", buffer[14 : 14 + 18 * 2])
+
+    mv_centers = np.asarray(
+        [
+            600,  # open (gaia G)
+            500,  # Gaia BP
+            800,  # Gaia RP
+            440,  # Johnson_B
+            548,  # Johnson_V
+            700,  # Johnson R
+            900,  # Johnson I
+            477,  # sloan g
+            622,  # Sloan r
+            762,  # sloan i
+            913,  # sloan z
+            1235,  # 2mass J
+            1662,  # 2mass h
+            2159,  # 2mass k_s
+            3400,  # WISE w1
+            4600,  # WISE w2
+            12000,  # WISE w3
+            22000,  # WISE w4
+        ]
+    )
 
     ra, dec, ra_pm, dec_pm, parallax = raw[0:5]
 
+    raw_mv_array = np.asarray(raw_mv) * 1.0e-3
+
+    centers = mv_centers[(raw_mv_array < 32) & (raw_mv_array > -32)]
+    mvs = raw_mv_array[(raw_mv_array < 32) & (raw_mv_array > -32)]
+
+    if filter_center is not None:
+        mv = np.interp(filter_center, centers, mvs)
+        # mv = get_star_mv(np.asarray(raw_mv) * 1.0e-3)
+
+    else:
+        mv = get_star_mv(raw_mv_array)
+
+    if mv < -32 or mv > 32:
+        mv = 32
+
     return {
-        'ra': ra * angleScale,
-        'dec': dec * angleScale,
-        'ra_pm': ra_pm * properMotionScale,
-        'dec_pm': dec_pm * properMotionScale,
-        'parallax': parallax * parallaxScale,
-        'mv': get_star_mv(np.asarray(raw_mv) * 1.0e-3)
+        "ra": ra * angleScale,
+        "dec": dec * angleScale,
+        "ra_pm": ra_pm * properMotionScale,
+        "dec_pm": dec_pm * properMotionScale,
+        "parallax": parallax * parallaxScale,
+        "mv": mv,
     }
 
 
@@ -324,7 +417,7 @@ def get_star_mv(mv):
     Returns:
         A `float`, the visual magnitude
     """
-    if mv[0] < 32:    # Open
+    if mv[0] < 32:  # Open
         return mv[0]
     elif mv[5] < 32:  # Johnson_R
         return mv[5]

@@ -9,16 +9,16 @@ from satsim.math import fftconv2p
 
 
 MAX_PIXEL_VALUE = {
-    'int8': 127.0,
-    'uint8': 255.0,
-    'int16': 32767.0,
-    'uint16': 65535.0,
-    'int32': 2147483647.0,
-    'uint32': 4294967295.0,
+    "int8": 127.0,
+    "uint8": 255.0,
+    "int16": 32767.0,
+    "uint16": 65535.0,
+    "int32": 2147483647.0,
+    "uint32": 4294967295.0,
 }
 
 
-def downsample(fpa, osf, method='conv2d'):
+def downsample(fpa, osf, method="conv2d"):
     """Downsample a 2D image tensor. Typically used to calculate the real pixel
     values in an oversampled image.
 
@@ -34,18 +34,20 @@ def downsample(fpa, osf, method='conv2d'):
     h = tf.cast(c[0], tf.int32)
     w = tf.cast(c[1], tf.int32)
 
-    if method == 'pool':
+    if method == "pool":
         n = tf.cast(osf * osf, tf.float32)
         return n * tf.squeeze(
             tf.nn.avg_pool(
                 tf.reshape(fpa, [1, h, w, 1]),
                 [1, osf, osf, 1],
                 [1, osf, osf, 1],
-                padding='SAME'))
+                padding="SAME",
+            )
+        )
 
     else:
 
-        filt = tf.ones((osf,osf))
+        filt = tf.ones((osf, osf))
         filt = filt[:, :, tf.newaxis, tf.newaxis]
 
         return tf.squeeze(
@@ -53,7 +55,9 @@ def downsample(fpa, osf, method='conv2d'):
                 input=tf.reshape(fpa, [1, h, w, 1]),
                 filters=filt,
                 strides=[1, osf, osf, 1],
-                padding="SAME"))
+                padding="SAME",
+            )
+        )
 
 
 def crop(fpa, y_pad, x_pad, y_size, x_size):
@@ -74,12 +78,12 @@ def crop(fpa, y_pad, x_pad, y_size, x_size):
     y_size = tf.cast(y_size, tf.int32)
     x_size = tf.cast(x_size, tf.int32)
 
-    return tf.slice(fpa,
-                    [y_pad, x_pad],
-                    [y_size, x_size])
+    return tf.slice(fpa, [y_pad, x_pad], [y_size, x_size])
 
 
-def analog_to_digital(fpa, gain, fwc, bias=0, dtype='uint16', saturated_pixel_model='max'):
+def analog_to_digital(
+    fpa, gain, fwc, bias=0, dtype="uint16", saturated_pixel_model="max"
+):
     """Converts photoelectron counts to digital counts. The linear model
     `digital * gain = analog` is used to covert from analog to digital counts.
     Photoelectron counts for each pixel are bound between `0` and `fwc`.
@@ -109,10 +113,12 @@ def analog_to_digital(fpa, gain, fwc, bias=0, dtype='uint16', saturated_pixel_mo
     fpa_digital = tf.where(condition, fpa_digital, tf.zeros(tf.shape(fpa)))
 
     # handle saturated pixels
-    if saturated_pixel_model == 'max':
+    if saturated_pixel_model == "max":
         if dtype in MAX_PIXEL_VALUE:
             condition = tf.less(fpa_digital, MAX_PIXEL_VALUE[dtype])
-            fpa_digital = tf.where(condition, fpa_digital, tf.fill(tf.shape(fpa), MAX_PIXEL_VALUE[dtype]))
+            fpa_digital = tf.where(
+                condition, fpa_digital, tf.fill(tf.shape(fpa), MAX_PIXEL_VALUE[dtype])
+            )
 
     return fpa_digital
 
@@ -168,7 +174,7 @@ def pe_to_mv(zeropoint, pe):
     return -2.5 * np.log10(pe) + zp
 
 
-def add_patch(fpa, r, c, cnt, patch, r_offset=0, c_offset=0, mode='fft'):
+def add_patch(fpa, r, c, cnt, patch, r_offset=0, c_offset=0, mode="fft"):
     """Add a patch to the input image, `fpa`, centered about each row, column coordinate.
     Patch is multiplied by the `cnt`. `patch` is typically normalized.
 
@@ -202,11 +208,11 @@ def add_patch(fpa, r, c, cnt, patch, r_offset=0, c_offset=0, mode='fft'):
     rr = tf.cast(r + r_offset, tf.int32)
     cc = tf.cast(c + c_offset, tf.int32)
 
-    if mode == 'fft':
+    if mode == "fft":
         patch_full = _to_shape(patch, fpa)
         # TODO need to investigate +1 shift
         delta = add_counts(tf.zeros_like(fpa, tf.float32), rr + 1, cc + 1, cnt)
-        fpa =  fftconv2p(delta, patch_full, pad=1)
+        fpa = fftconv2p(delta, patch_full, pad=1)
     else:
 
         def c(i, img, rr, cc, pe):
@@ -221,7 +227,9 @@ def add_patch(fpa, r, c, cnt, patch, r_offset=0, c_offset=0, mode='fft'):
             overlay = pe[i] * patch
 
             if r >= 0 and c >= 0 and r_end < fpa_rows and c_end < fpa_cols:
-                overlay_pad = tf.pad(overlay, [[r, fpa_rows - r_end], [c, fpa_cols - c_end]])
+                overlay_pad = tf.pad(
+                    overlay, [[r, fpa_rows - r_end], [c, fpa_cols - c_end]]
+                )
                 img = img + overlay_pad
 
             return i + 1, img, rr, cc, pe
@@ -230,7 +238,11 @@ def add_patch(fpa, r, c, cnt, patch, r_offset=0, c_offset=0, mode='fft'):
         i, fpa, _, _, _ = tf.while_loop(c, f, (i, fpa, rr, cc, cnt))
 
     # crop so that patches are centered
-    fpa = tf.slice(fpa, [patch_rows_div2, patch_cols_div2], [fpa_rows - patch_rows - patch_rows, fpa_cols - patch_cols - patch_cols])
+    fpa = tf.slice(
+        fpa,
+        [patch_rows_div2, patch_cols_div2],
+        [fpa_rows - patch_rows - patch_rows, fpa_cols - patch_cols - patch_cols],
+    )
 
     return fpa
 
@@ -311,17 +323,41 @@ def transform_and_fft(fpa, r, c, cnt, t_start, t_end, t_osf, rotation, translati
     w_mid = w_minus_1 / 2.0
 
     # create PSF by creating point source in the middle then transforming it
-    blur = transform_and_add_counts(tf.zeros_like(fpa, tf.float32), [h_mid], [w_mid], [1.0], t_start, t_end, t_osf, rotation, translation)
+    blur = transform_and_add_counts(
+        tf.zeros_like(fpa, tf.float32),
+        [h_mid],
+        [w_mid],
+        [1.0],
+        t_start,
+        t_end,
+        t_osf,
+        rotation,
+        translation,
+    )
 
     # create delta functions
-    (rr, cc) = rotate_and_translate(h_minus_1, w_minus_1, r, c, 0.0, rotation, translation)
+    (rr, cc) = rotate_and_translate(
+        h_minus_1, w_minus_1, r, c, 0.0, rotation, translation
+    )
     delta = add_counts(tf.zeros_like(fpa, tf.float32), rr, cc, cnt)
 
     # FFT
     return fftconv2p(delta, blur, pad=1)
 
 
-def transform_and_add_counts(fpa, r, c, cnt, t_start, t_end, t_osf, rotation, translation, batch_size=500, filter_out_of_bounds=True):
+def transform_and_add_counts(
+    fpa,
+    r,
+    c,
+    cnt,
+    t_start,
+    t_end,
+    t_osf,
+    rotation,
+    translation,
+    batch_size=500,
+    filter_out_of_bounds=True,
+):
     """Applies discrete rotation and translation transformations to a set of
     input points. This has the effect of "smearing" or "streaking" the point
     between times `t_start` and `t_end`. The number of transforms calculated is
@@ -364,13 +400,19 @@ def transform_and_add_counts(fpa, r, c, cnt, t_start, t_end, t_osf, rotation, tr
     cnt_os = cnt / tf.cast(t_osf, tf.float32)
 
     if filter_out_of_bounds:
-        (rr0_tmp, cc0_tmp) = rotate_and_translate(h_minus_1, w_minus_1, r, c, t_start, rotation, translation)
-        (rr1_tmp, cc1_tmp) = rotate_and_translate(h_minus_1, w_minus_1, r, c, t_end, rotation, translation)
+        (rr0_tmp, cc0_tmp) = rotate_and_translate(
+            h_minus_1, w_minus_1, r, c, t_start, rotation, translation
+        )
+        (rr1_tmp, cc1_tmp) = rotate_and_translate(
+            h_minus_1, w_minus_1, r, c, t_end, rotation, translation
+        )
         rr_lt_0 = tf.math.logical_and(rr0_tmp < 0, rr1_tmp < 0)
         rr_gt_w = tf.math.logical_and(rr0_tmp > w, rr1_tmp > w)
         cc_lt_0 = tf.math.logical_and(cc0_tmp < 0, cc1_tmp < 0)
         cc_gt_h = tf.math.logical_and(cc0_tmp > h, cc1_tmp > h)
-        out_of_bounds = tf.math.logical_or(tf.math.logical_or(rr_lt_0, rr_gt_w), tf.math.logical_or(cc_lt_0, cc_gt_h))
+        out_of_bounds = tf.math.logical_or(
+            tf.math.logical_or(rr_lt_0, rr_gt_w), tf.math.logical_or(cc_lt_0, cc_gt_h)
+        )
         in_bounds = tf.math.logical_not(out_of_bounds)
         r_filter = tf.boolean_mask(r, in_bounds)
         c_filter = tf.boolean_mask(c, in_bounds)
@@ -402,12 +444,15 @@ def transform_and_add_counts(fpa, r, c, cnt, t_start, t_end, t_osf, rotation, tr
         cnt_os = tf.tile(cnt_os_batch[i, :], [t_osf])
 
         # perform transformation
-        (rr, cc) = rotate_and_translate(h_minus_1, w_minus_1, rr, cc, tt, rotation, translation)
-
+        (rr, cc) = rotate_and_translate(
+            h_minus_1, w_minus_1, rr, cc, tt, rotation, translation
+        )
         return [i + 1, add_counts(img, rr, cc, cnt_os), r_batch, c_batch, cnt_os_batch]
 
     i = tf.constant(0)
-    i, image, _, _, _ = tf.while_loop(func_condition, func_eval, (i, fpa, r_batch, c_batch, cnt_os_batch))
+    i, image, _, _, _ = tf.while_loop(
+        func_condition, func_eval, (i, fpa, r_batch, c_batch, cnt_os_batch)
+    )
 
     return image
 
@@ -416,7 +461,12 @@ def _to_batch_1d(x, batch_size):
 
     remainder = batch_size - tf.math.floormod(x.shape[0], batch_size)
 
-    x = tf.pad(x, [[0, remainder],])
+    x = tf.pad(
+        x,
+        [
+            [0, remainder],
+        ],
+    )
 
     num_batches = tf.cast(x.shape[0] / batch_size, tf.int32)
 
@@ -448,6 +498,10 @@ else:
 def _to_shape(a, b):
     y_, x_ = b.shape
     y, x = a.shape
-    y_pad = (y_ - y)
-    x_pad = (x_ - x)
-    return tf.pad(a, ((y_pad // 2, y_pad // 2 + y_pad % 2), (x_pad // 2, x_pad // 2 + x_pad % 2)), mode='constant')
+    y_pad = y_ - y
+    x_pad = x_ - x
+    return tf.pad(
+        a,
+        ((y_pad // 2, y_pad // 2 + y_pad % 2), (x_pad // 2, x_pad // 2 + x_pad % 2)),
+        mode="constant",
+    )

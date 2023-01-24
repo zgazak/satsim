@@ -7,13 +7,41 @@ import tensorflow as tf
 import numpy as np
 
 from satsim.math import fftconv2p
-from satsim.image.fpa import downsample, crop, add_counts, transform_and_add_counts, transform_and_fft
+from satsim.image.fpa import (
+    downsample,
+    crop,
+    add_counts,
+    transform_and_add_counts,
+    transform_and_fft,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def render_piecewise(h, w, h_sub, w_sub, h_pad_os, w_pad_os, s_osf, psf_os, r_obs_os, c_obs_os, pe_obs_os, r_stars_os, c_stars_os, pe_stars_os, t_start_star, t_end_star, t_osf, star_rot_rate, star_tran_os, render_separate=True, star_render_mode='transform'):
-    """ Render an image in sub sections. Useful if target supersample image does not fit in GPU memory.
+def render_piecewise(
+    h,
+    w,
+    h_sub,
+    w_sub,
+    h_pad_os,
+    w_pad_os,
+    s_osf,
+    psf_os,
+    r_obs_os,
+    c_obs_os,
+    pe_obs_os,
+    r_stars_os,
+    c_stars_os,
+    pe_stars_os,
+    t_start_star,
+    t_end_star,
+    t_osf,
+    star_rot_rate,
+    star_tran_os,
+    render_separate=True,
+    star_render_mode="transform",
+):
+    """Render an image in sub sections. Useful if target supersample image does not fit in GPU memory.
 
     Args:
         h: `int`, image height in number of real pixels.
@@ -67,11 +95,15 @@ def render_piecewise(h, w, h_sub, w_sub, h_pad_os, w_pad_os, s_osf, psf_os, r_ob
     fpa_conv_star = np.zeros((n_h_div, n_w_div, h_sub, w_sub))
     fpa_conv_targ = np.zeros((n_h_div, n_w_div, h_sub, w_sub))
 
-    logger.debug('Rendering {}x{} divisions with {}x{} pixels.'.format(n_h_div, n_w_div, h_sub, w_sub))
+    logger.debug(
+        "Rendering {}x{} divisions with {}x{} pixels.".format(
+            n_h_div, n_w_div, h_sub, w_sub
+        )
+    )
 
     # render #TODO convert to TensorFlow
     for ir in range(n_h_div):
-        logger.debug('Rendering row {} of {}.'.format(ir + 1, n_h_div))
+        logger.debug("Rendering row {} of {}.".format(ir + 1, n_h_div))
         ir_f32 = tf.cast(ir, tf.float32)
         for ic in range(n_w_div):
             ic_f32 = tf.cast(ic, tf.float32)
@@ -87,24 +119,73 @@ def render_piecewise(h, w, h_sub, w_sub, h_pad_os, w_pad_os, s_osf, psf_os, r_ob
             c_obs_sub = c_obs_os - c_sub_os_start
             pe_obs_sub = pe_obs_os
 
-            fpa_conv_star[ir][ic], fpa_conv_targ[ir][ic], _, _, _ = render_full(h_sub_os, w_sub_os, h_sub_pad_os, w_sub_pad_os, h_pad_os_div2, w_pad_os_div2, s_osf, psf_os, r_obs_sub, c_obs_sub, pe_obs_sub, r_stars_sub, c_stars_sub, pe_stars_sub, t_start_star, t_end_star, t_osf, star_rot_rate, star_tran_os, render_separate=render_separate, star_render_mode=star_render_mode)
+            fpa_conv_star[ir][ic], fpa_conv_targ[ir][ic], _, _, _ = render_full(
+                h_sub_os,
+                w_sub_os,
+                h_sub_pad_os,
+                w_sub_pad_os,
+                h_pad_os_div2,
+                w_pad_os_div2,
+                s_osf,
+                psf_os,
+                r_obs_sub,
+                c_obs_sub,
+                pe_obs_sub,
+                r_stars_sub,
+                c_stars_sub,
+                pe_stars_sub,
+                t_start_star,
+                t_end_star,
+                t_osf,
+                star_rot_rate,
+                star_tran_os,
+                render_separate=render_separate,
+                star_render_mode=star_render_mode,
+            )
 
     fpa_conv_star_stitch = tf.cast(fpa_conv_star, tf.float32)
     fpa_conv_targ_stitch = tf.cast(fpa_conv_targ, tf.float32)
     fpa_conv_star_stitch = tf.transpose(fpa_conv_star_stitch, perm=[0, 2, 1, 3])
     fpa_conv_targ_stitch = tf.transpose(fpa_conv_targ_stitch, perm=[0, 2, 1, 3])
-    fpa_conv_star_stitch = tf.reshape(fpa_conv_star_stitch, (h_sub * n_h_div, w_sub * n_w_div))
-    fpa_conv_targ_stitch = tf.reshape(fpa_conv_targ_stitch, (h_sub * n_h_div, w_sub * n_w_div))
+    fpa_conv_star_stitch = tf.reshape(
+        fpa_conv_star_stitch, (h_sub * n_h_div, w_sub * n_w_div)
+    )
+    fpa_conv_targ_stitch = tf.reshape(
+        fpa_conv_targ_stitch, (h_sub * n_h_div, w_sub * n_w_div)
+    )
 
     # crop #TODO convert to TensorFlow
-    fpa_conv_star = tf.cast(fpa_conv_star_stitch[0:h,0:w], tf.float32)
-    fpa_conv_targ = tf.cast(fpa_conv_targ_stitch[0:h,0:w], tf.float32)
+    fpa_conv_star = tf.cast(fpa_conv_star_stitch[0:h, 0:w], tf.float32)
+    fpa_conv_targ = tf.cast(fpa_conv_targ_stitch[0:h, 0:w], tf.float32)
 
     return fpa_conv_star, fpa_conv_targ, None, None, None
 
 
-def render_full(h_fpa_os, w_fpa_os, h_fpa_pad_os, w_fpa_pad_os, h_pad_os_div2, w_pad_os_div2, s_osf, psf_os, r_obs_os, c_obs_os, pe_obs_os, r_stars_os, c_stars_os, pe_stars_os, t_start_star, t_end_star, t_osf, star_rot_rate, star_tran_os, render_separate=True, obs_model=None, star_render_mode='transform'):
-    """ Render an image.
+def render_full(
+    h_fpa_os,
+    w_fpa_os,
+    h_fpa_pad_os,
+    w_fpa_pad_os,
+    h_pad_os_div2,
+    w_pad_os_div2,
+    s_osf,
+    psf_os,
+    r_obs_os,
+    c_obs_os,
+    pe_obs_os,
+    r_stars_os,
+    c_stars_os,
+    pe_stars_os,
+    t_start_star,
+    t_end_star,
+    t_osf,
+    star_rot_rate,
+    star_tran_os,
+    render_separate=True,
+    obs_model=None,
+    star_render_mode="transform",
+):
+    """Render an image.
 
     Args:
         h_fpa_os: `int`, image height in oversampled space.
@@ -142,10 +223,32 @@ def render_full(h_fpa_os, w_fpa_os, h_fpa_pad_os, w_fpa_pad_os, h_pad_os_div2, w
     """
     # render stars
     fpa_os_w_stars = tf.zeros([h_fpa_pad_os, w_fpa_pad_os], tf.float32)
-    if star_render_mode == 'fft':
-        fpa_os_w_stars = transform_and_fft(fpa_os_w_stars, r_stars_os, c_stars_os, pe_stars_os, t_start_star, t_end_star, t_osf, star_rot_rate, star_tran_os)
+
+    if star_render_mode == "fft":
+        fpa_os_w_stars = transform_and_fft(
+            fpa_os_w_stars,
+            r_stars_os,
+            c_stars_os,
+            pe_stars_os,
+            t_start_star,
+            t_end_star,
+            t_osf,
+            star_rot_rate,
+            star_tran_os,
+        )
     else:
-        fpa_os_w_stars = transform_and_add_counts(fpa_os_w_stars, r_stars_os, c_stars_os, pe_stars_os, t_start_star, t_end_star, t_osf, star_rot_rate, star_tran_os)
+
+        fpa_os_w_stars = transform_and_add_counts(
+            fpa_os_w_stars,
+            r_stars_os,
+            c_stars_os,
+            pe_stars_os,
+            t_start_star,
+            t_end_star,
+            t_osf,
+            star_rot_rate,
+            star_tran_os,
+        )
 
     # render modeled targets
     fpa_os_w_targets = tf.zeros([h_fpa_pad_os, w_fpa_pad_os], tf.float32)
@@ -154,31 +257,101 @@ def render_full(h_fpa_os, w_fpa_os, h_fpa_pad_os, w_fpa_pad_os, h_pad_os_div2, w
             fpa_os_w_targets = fpa_os_w_targets + tf.cast(om, tf.float32)
 
         # mask stars (occultation)
-        condition = tf.math.greater(fpa_os_w_targets, tf.zeros_like(fpa_os_w_targets, tf.float32))
-        fpa_os_w_stars = tf.where(condition, tf.zeros_like(fpa_os_w_stars, tf.float32), fpa_os_w_stars)
+        condition = tf.math.greater(
+            fpa_os_w_targets, tf.zeros_like(fpa_os_w_targets, tf.float32)
+        )
+        fpa_os_w_stars = tf.where(
+            condition, tf.zeros_like(fpa_os_w_stars, tf.float32), fpa_os_w_stars
+        )
 
-    # render point source targets
-    fpa_os_w_targets = add_counts(fpa_os_w_targets, r_obs_os, c_obs_os, pe_obs_os, h_pad_os_div2, w_pad_os_div2)
+    # render point source targets... as a collection of arrays
+    fpa_os_w_target_list = [
+        add_counts(fpa_os_w_targets, [r], [c], [pe], h_pad_os_div2, w_pad_os_div2)
+        for r, c, pe in zip(r_obs_os, c_obs_os, pe_obs_os)
+    ]
 
     if render_separate:
 
         # blur stars
         fpa_conv_os = fftconv2p(fpa_os_w_stars, psf_os, pad=1)
-        fpa_conv_crop = crop(fpa_conv_os, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os)
-        fpa_conv_star = downsample(fpa_conv_crop, s_osf, 'pool')
+        fpa_conv_crop = crop(
+            fpa_conv_os, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os
+        )
+        fpa_conv_star = downsample(fpa_conv_crop, s_osf, "pool")
+
+        star_box_wide = (t_end_star - t_start_star).numpy() * star_tran_os[1] / s_osf
+        star_box_high = (t_end_star - t_start_star).numpy() * star_tran_os[0] / s_osf
+
+        star_x = (c_stars_os - w_pad_os_div2) / s_osf
+        star_y = (r_stars_os - h_pad_os_div2) / s_osf
+
+        corners = np.stack(
+            [star_x, star_x + star_box_wide, star_y, star_y + star_box_high]
+        )
+
+        good = np.where(
+            (
+                ((corners[0, :] > 0) | (corners[1, :] > 0))
+                & (
+                    (corners[0, :] < fpa_conv_star.shape[1])
+                    | (corners[1, :] < fpa_conv_star.shape[1])
+                )
+            )
+            & (
+                ((corners[2, :] > 0) | (corners[3, :] > 0))
+                & (
+                    (corners[2, :] < fpa_conv_star.shape[0])
+                    | (corners[3, :] < fpa_conv_star.shape[0])
+                )
+            )
+        )[0]
+
+        star_x = star_x.numpy()[good]
+        if star_box_wide < 0:
+            star_x += star_box_wide
+            star_box_wide *= -1
+        star_y = star_y.numpy()[good]
+        if star_box_high < 0:
+            star_y += star_box_high
+            star_box_high *= -1
+
+        star_boxes = [
+            [int(x), int(y), int(star_box_wide), int(star_box_high)]
+            for x, y in zip(star_x, star_y)
+        ]
 
         # blur targets
-        fpa_conv_os = fftconv2p(fpa_os_w_targets, psf_os, pad=1)
-        fpa_conv_crop = crop(fpa_conv_os, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os)
-        fpa_conv_targ = downsample(fpa_conv_crop, s_osf, 'pool')
+        fpa_conv_os = [
+            fftconv2p(target, psf_os, pad=1) for target in fpa_os_w_target_list
+        ]
+        fpa_conv_crop = [
+            crop(target, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os)
+            for target in fpa_conv_os
+        ]
+        fpa_conv_targ = [downsample(target, s_osf, "pool") for target in fpa_conv_crop]
 
-        return fpa_conv_star, fpa_conv_targ, fpa_os_w_targets, fpa_conv_os, fpa_conv_crop
+        return (
+            fpa_conv_star,
+            fpa_conv_targ,
+            fpa_os_w_targets,
+            fpa_conv_os,
+            fpa_conv_crop,
+            star_boxes,
+        )
 
     else:
 
         # blur targets and stars together
         fpa_conv_os = fftconv2p(fpa_os_w_stars + fpa_os_w_targets, psf_os, pad=1)
-        fpa_conv_crop = crop(fpa_conv_os, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os)
-        fpa_conv_ds = downsample(fpa_conv_crop, s_osf, 'pool')
+        fpa_conv_crop = crop(
+            fpa_conv_os, h_pad_os_div2, w_pad_os_div2, h_fpa_os, w_fpa_os
+        )
+        fpa_conv_ds = downsample(fpa_conv_crop, s_osf, "pool")
 
-        return fpa_conv_ds, tf.zeros_like(fpa_conv_ds), fpa_os_w_targets, fpa_conv_os, fpa_conv_crop
+        return (
+            fpa_conv_ds,
+            tf.zeros_like(fpa_conv_ds),
+            fpa_os_w_targets,
+            fpa_conv_os,
+            fpa_conv_crop,
+        )
