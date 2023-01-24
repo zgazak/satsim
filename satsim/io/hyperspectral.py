@@ -277,31 +277,42 @@ def write_frame(
 
     # save annotated images
     if save_jpeg:
+        try:
+            image.savecube(
+                os.path.join(annotatedimgcube_dir, "{}.jpg".format(file_name)),
+                fpa_digital,
+                vauto=True,
+                annotation=meta_data["data"]["objects"],
+                show_obs_boxes=show_obs_boxes,
+            )
+        except Exception:
+            pass
 
-        image.savecube(
-            os.path.join(annotatedimgcube_dir, "{}.jpg".format(file_name)),
-            fpa_digital,
-            vauto=True,
-            annotation=meta_data["data"]["objects"],
-            show_obs_boxes=show_obs_boxes,
-        )
-        image.save(
-            os.path.join(annotatedimg_dir, "{}.jpg".format(file_name)),
-            fpa_digital,
-            vauto=True,
-            pad=5,
-            annotation=meta_data["data"]["objects"],
-            show_obs_boxes=show_obs_boxes,
-        )
-        image.save(
-            os.path.join(annotatedimgstar_dir, "{}.jpg".format(file_name)),
-            fpa_digital,
-            vauto=True,
-            pad=0,
-            annotation=meta_data["data"]["objects"],
-            show_obs_boxes=show_obs_boxes,
-            show_star_boxes=meta_data["data"]["star_boxes"],
-        )
+        try:
+            image.save(
+                os.path.join(annotatedimg_dir, "{}.jpg".format(file_name)),
+                fpa_digital,
+                vauto=True,
+                pad=5,
+                annotation=meta_data["data"]["objects"],
+                show_obs_boxes=show_obs_boxes,
+            )
+        except Exception:
+            pass
+
+        try:
+            image.save(
+                os.path.join(annotatedimgstar_dir, "{}.jpg".format(file_name)),
+                fpa_digital,
+                vauto=True,
+                pad=0,
+                annotation=meta_data["data"]["objects"],
+                show_obs_boxes=show_obs_boxes,
+                show_star_boxes=meta_data["data"]["star_boxes"],
+            )
+        except Exception:
+            pass
+
         """
         image.savecubeover(
             os.path.join(annotatedimgcubeo_dir, "{}.jpg".format(file_name)),

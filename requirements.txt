@@ -5,7 +5,7 @@
     pandas~=0.24
     PyYAML~=5.1
     matplotlib~=3.3.0
-    astropy==3.2.3
+    astropy==5.2
     astroquery==0.4.1
     apng~=0.3.4
     scipy~=1.5.4
