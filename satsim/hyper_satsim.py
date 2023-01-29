@@ -306,14 +306,20 @@ def gen_images(
                         dirname=os.path.join(dir_name, "AnnotatedImages"),
                         filename="movie.png",
                     )
-                    save_apng(
-                        dirname=os.path.join(dir_name, "AnnotatedImagesCube"),
-                        filename="movie.png",
-                    )
-                    save_apng(
-                        dirname=os.path.join(dir_name, "AnnotatedImagesStars"),
-                        filename="movie.png",
-                    )
+                    try:
+                        save_apng(
+                            dirname=os.path.join(dir_name, "AnnotatedImagesCube"),
+                            filename="movie.png",
+                        )
+                    except:
+                        pass
+                    try:
+                        save_apng(
+                            dirname=os.path.join(dir_name, "AnnotatedImagesStars"),
+                            filename="movie.png",
+                        )
+                    except:
+                        pass
                 return
 
     if queue is not None:
