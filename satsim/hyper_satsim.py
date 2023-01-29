@@ -236,7 +236,17 @@ def gen_images(
         ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
     ):
 
-        snr = signal_to_noise_ratio(fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf)
+        if len(fpa_conv_targ) == 0:
+            snr = signal_to_noise_ratio(
+                fpa_conv_star * 0.0, fpa_conv_star + bg_tf + dc_tf, rn_tf
+            )
+
+        else:
+
+            snr = signal_to_noise_ratio(
+                fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf
+            )
+
         if num_shot_noise_samples is not None:
             snr = snr * np.sqrt(num_shot_noise_samples)
 
@@ -602,6 +612,8 @@ def image_generator(
             tt = ssp["geometry"]["time"]
         else:
             tt = [2020, 1, 1, 0, 0, 0.0]
+
+        logger.warning(tt)
 
         t0 = time.utc_from_list(tt)
         t1 = time.utc_from_list(tt, exposure_time)
@@ -1135,9 +1147,12 @@ def image_generator(
                 t_start_star = t_start
                 t_end_star = t_end
 
-                hypermags = ssp["geometry"]["obs"]["list"][0].get("hypermags", [])
                 filters = ssp["spectral"]["filter_centers"]
 
+                if len(ssp["geometry"]["obs"]["list"]) > 0:
+                    hypermags = ssp["geometry"]["obs"]["list"][0].get("hypermags", [])
+                else:
+                    hypermags = [99.0 for filt in filters]
                 fpas = []
                 segs = []
                 for idx, (m_v, center_nm) in enumerate(zip(hypermags, filters)):
@@ -1300,9 +1315,13 @@ def image_generator(
                     ]
 
                     # add noise
-                    fpa_conv = (
-                        fpa_conv_star + tf.math.add_n(fpa_conv_targ) + bg_tf
-                    ) * gain_tf + dc_tf
+                    # no targets:
+                    if len(fpa_conv_targ) == 0:
+                        fpa_conv = (fpa_conv_star + bg_tf) * gain_tf + dc_tf
+                    else:
+                        fpa_conv = (
+                            fpa_conv_star + tf.math.add_n(fpa_conv_targ) + bg_tf
+                        ) * gain_tf + dc_tf
                     if ssp["sim"]["enable_shot_noise"] is True:
                         fpa_conv_noise = add_photon_noise(
                             fpa_conv, ssp["sim"]["num_shot_noise_samples"]
@@ -1410,11 +1429,18 @@ def image_generator(
                                 ],
                                 picklefile,
                             )
+                    if len(fpa_conv_targ) == 0:
+                        seg_list = [
+                            fpa - fpa_conv_star * gain_tf,
+                            fpa_conv_star * gain_tf,
+                        ]
 
-                    seg_list = [
-                        fpa - (fpa_conv_star + tf.math.add_n(fpa_conv_targ)) * gain_tf,
-                        fpa_conv_star * gain_tf,
-                    ] + [fpa * gain_tf for fpa in fpa_conv_targ]
+                    else:
+                        seg_list = [
+                            fpa
+                            - (fpa_conv_star + tf.math.add_n(fpa_conv_targ)) * gain_tf,
+                            fpa_conv_star * gain_tf,
+                        ] + [fpa * gain_tf for fpa in fpa_conv_targ]
 
                     seg_arr = tf.math.round(tf.stack(seg_list))
                     seg_arr = tf.math.divide(seg_arr, tf.reduce_sum(seg_arr, 0))
