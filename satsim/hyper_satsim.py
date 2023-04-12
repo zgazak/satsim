@@ -109,7 +109,6 @@ def gen_multi(
     n = ssp["sim"]["samples"] if "samples" in ssp["sim"] else 1
 
     for set_num in range(n):
-
         tic("gen_set", set_num)
 
         logger.info(
@@ -231,18 +230,17 @@ def gen_images(
         num_shot_noise_samples,
         seg_array,
         star_boxes,
+        star_lines,
         FWHM,
     ) in image_generator(
         ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
     ):
-
         if len(fpa_conv_targ) == 0:
             snr = signal_to_noise_ratio(
                 fpa_conv_star * 0.0, fpa_conv_star + bg_tf + dc_tf, rn_tf
             )
 
         else:
-
             snr = signal_to_noise_ratio(
                 fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf
             )
@@ -260,6 +258,7 @@ def gen_images(
             snr=snr,
             obs_annot=ssp["geometry"]["obs"]["list"],
             star_annot=star_boxes,
+            star_lines=star_lines,
         )
         if queue is not None:
             queue.task(
@@ -709,7 +708,6 @@ def image_generator(
 
         # site
         if "site" in ssp["geometry"]:
-
             # note: stars will track horizontally where zenith is pointed up. focal plane rotation is simulated with the `rotation` variable
             star_rot = ssp["geometry"]["site"]["gimbal"]["rotation"]
             track_mode = ssp["geometry"]["site"]["track"]["mode"]
@@ -865,7 +863,6 @@ def image_generator(
             ts_end = time.utc_from_list(tt, t_end)
 
             for i, o in enumerate(obs):
-
                 # TODO support in frame events
                 updated = False
                 if "events" in o:
@@ -1033,7 +1030,6 @@ def image_generator(
                         and not math.isnan(rr2[0])
                         and not math.isnan(cc2[0])
                     ):
-
                         if rr0[0] < -h_pad_os and rr2[0] < -h_pad_os:
                             continue
                         elif rr0[0] > h_fpa_pad_os and rr2[0] > h_fpa_pad_os:
@@ -1131,7 +1127,6 @@ def image_generator(
             return orrr, occc, oppp, obs_os_pix, obs_model
 
         if True:  # TODO remove eager
-
             gain_tf = tf.cast(gain, tf.float32)
             bg_tf = tf.cast(bg, tf.float32)
             dc_tf = tf.cast(dc, tf.float32)
@@ -1162,7 +1157,6 @@ def image_generator(
                 fpas = []
                 segs = []
                 for idx, (m_v, center_nm) in enumerate(zip(hypermags, filters)):
-
                     logger.debug(
                         "Generating filter {} of {}. Mag {}".format(
                             idx, len(hypermags), m_v
@@ -1286,6 +1280,7 @@ def image_generator(
                             fpa_conv_os,
                             fpa_conv_crop,
                             star_boxes,
+                            star_lines,
                         ) = render_full(
                             h_fpa_os,
                             w_fpa_os,
@@ -1306,6 +1301,7 @@ def image_generator(
                             t_osf,
                             star_rot_rate,
                             star_tran_os,
+                            m_stars_os,
                             render_separate=ssp["sim"]["calculate_snr"],
                             obs_model=obs_model,
                             star_render_mode=ssp["sim"]["star_render_mode"],
@@ -1459,11 +1455,10 @@ def image_generator(
                 fpa_digital = tf.stack(fpas, 2)
                 seg_arr = tf.stack(segs, 3)
                 if with_meta:
-
                     yield fpa_digital, frame_num, astrometrics, obs_os_pix, fpa_conv_star, fpa_conv_targ, bg_tf, dc_tf, rn_tf, ssp[
                         "sim"
                     ][
                         "num_shot_noise_samples"
-                    ], seg_arr, star_boxes, FWHM
+                    ], seg_arr, star_boxes, star_lines, FWHM
                 else:
                     yield fpa_digital

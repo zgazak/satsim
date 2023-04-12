@@ -6,12 +6,11 @@ from os.path import isfile, join, splitext
 import numpy as np
 import matplotlib.image as mpimg
 
-from skimage.draw import rectangle_perimeter
+from skimage.draw import rectangle_perimeter, line
 
 
 def get_shape(fpa_np):
     try:
-
         (h, w) = fpa_np.shape
         c = 1
     except:
@@ -31,6 +30,7 @@ def save(
     pad=5,
     show_obs_boxes=True,
     show_star_boxes=[],
+    show_star_lines=[],
 ):
     """Save an array as an image file.
 
@@ -75,6 +75,27 @@ def save(
         end = (box[1] + box[3] + pad, box[0] + box[2] + pad)
         rr, cc = rectangle_perimeter(start, end=end, shape=fpa_np.shape)
         fpa_np[rr, cc] = max_val
+
+    for lin in show_star_lines:
+        rr, cc = line(int(lin[1]), int(lin[0]), int(lin[3]), int(lin[2]))
+
+        try:
+            r1, c1 = zip(
+                *(
+                    (rr, cc)
+                    for rr, cc in zip(rr, cc)
+                    if (
+                        rr > 0
+                        and cc > 0
+                        and rr < fpa_np.shape[0]
+                        and cc < fpa_np.shape[1]
+                    )
+                )
+            )
+
+            fpa_np[r1, c1] = min_val
+        except:
+            pass
 
     mpimg.imsave(
         filename,

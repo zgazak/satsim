@@ -49,6 +49,7 @@ def set_frame_annotation(
     snr=None,
     obs_annot=None,
     star_annot=None,
+    star_lines=None,
 ):
     """Set frame data on annotation object for SatNet.
 
@@ -74,6 +75,7 @@ def set_frame_annotation(
 
     objs = data["data"]["objects"] = []
     data["data"]["star_boxes"] = star_annot if star_annot is not None else []
+    data["data"]["star_lines"] = star_lines if star_lines is not None else []
 
     def is_ob(a, b):
         if a > 1 and b > 1 or a < 0 and b < 0:
@@ -266,7 +268,7 @@ def write_frame(
         overwrite=True,
         astrometrics=astrometrics,
         dtype=dtype,
-        seg_map=seg_map,
+        # seg_map=seg_map,
     )
 
     # save annotation
@@ -309,8 +311,10 @@ def write_frame(
                 annotation=meta_data["data"]["objects"],
                 show_obs_boxes=show_obs_boxes,
                 show_star_boxes=meta_data["data"]["star_boxes"],
+                show_star_lines=meta_data["data"]["star_lines"],
             )
-        except Exception:
+        except Exception as e:
+            raise e
             pass
 
         """

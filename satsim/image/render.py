@@ -1,5 +1,5 @@
 from __future__ import division, print_function, absolute_import
-
+import pdb
 import math
 import logging
 
@@ -181,6 +181,7 @@ def render_full(
     t_osf,
     star_rot_rate,
     star_tran_os,
+    m_stars_os,
     render_separate=True,
     obs_model=None,
     star_render_mode="transform",
@@ -237,7 +238,6 @@ def render_full(
             star_tran_os,
         )
     else:
-
         fpa_os_w_stars = transform_and_add_counts(
             fpa_os_w_stars,
             r_stars_os,
@@ -271,7 +271,6 @@ def render_full(
     ]
 
     if render_separate:
-
         # blur stars
         fpa_conv_os = fftconv2p(fpa_os_w_stars, psf_os, pad=1)
         fpa_conv_crop = crop(
@@ -307,10 +306,22 @@ def render_full(
         )[0]
 
         star_x = star_x.numpy()[good]
+        star_y = star_y.numpy()[good]
+
+        star_lines = [
+            [
+                float(x),
+                float(y),
+                float(x + star_box_wide),
+                float(y + star_box_high),
+                mag,
+            ]
+            for x, y, mag in zip(star_x, star_y, m_stars_os)
+        ]
+
         if star_box_wide < 0:
             star_x += star_box_wide
             star_box_wide *= -1
-        star_y = star_y.numpy()[good]
         if star_box_high < 0:
             star_y += star_box_high
             star_box_high *= -1
@@ -337,10 +348,10 @@ def render_full(
             fpa_conv_os,
             fpa_conv_crop,
             star_boxes,
+            star_lines,
         )
 
     else:
-
         # blur targets and stars together
         fpa_conv_os = fftconv2p(fpa_os_w_stars + fpa_os_w_targets, psf_os, pad=1)
         fpa_conv_crop = crop(
