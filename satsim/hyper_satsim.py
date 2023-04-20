@@ -1453,6 +1453,18 @@ def image_generator(
                     # indent to here
 
                 fpa_digital = tf.stack(fpas, 2)
+
+                if "hyperspectral" in ssp["fpa"]:
+                    plexed_fpa_digital = np.zeros(tuple(fpa_digital.shape[:2]))
+                    offset = ssp["fpa"]["hyperspectral"]["pattern"][0]
+                    chanmap = np.array(ssp["fpa"]["hyperspectral"]["order"])
+                    for _x in range(ssp["fpa"]["hyperspectral"]["pattern"][0]):
+                        for _y in range(ssp["fpa"]["hyperspectral"]["pattern"][1]):
+                            plexed_fpa_digital[_x::offset, _y::offset] = fpa_digital[
+                                :, :, chanmap[_x, _y]
+                            ][_x::offset, _y::offset]
+                    fpa_digital = tf.convert_to_tensor(plexed_fpa_digital)
+
                 seg_arr = tf.stack(segs, 3)
                 if with_meta:
                     yield fpa_digital, frame_num, astrometrics, obs_os_pix, fpa_conv_star, fpa_conv_targ, bg_tf, dc_tf, rn_tf, ssp[
