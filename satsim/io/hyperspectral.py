@@ -279,6 +279,7 @@ def write_frame(
 
     # save annotated images
     if save_jpeg:
+        """
         try:
             image.savecube(
                 os.path.join(annotatedimgcube_dir, "{}.jpg".format(file_name)),
@@ -289,7 +290,7 @@ def write_frame(
             )
         except Exception:
             pass
-
+        """
         try:
             image.save(
                 os.path.join(annotatedimg_dir, "{}.jpg".format(file_name)),
@@ -301,7 +302,7 @@ def write_frame(
             )
         except Exception:
             pass
-
+        """
         try:
             image.save(
                 os.path.join(annotatedimgstar_dir, "{}.jpg".format(file_name)),
@@ -317,7 +318,6 @@ def write_frame(
             raise e
             pass
 
-        """
         image.savecubeover(
             os.path.join(annotatedimgcubeo_dir, "{}.jpg".format(file_name)),
             fpa_digital,
