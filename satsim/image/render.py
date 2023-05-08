@@ -305,12 +305,9 @@ def render_full(
             )
         )[0]
 
-        import pdb
-
-        pdb.set_trace()
         star_x = star_x.numpy()[good]
         star_y = star_y.numpy()[good]
-        m_stars_os = m_stars_os.numpy()[good]
+        m_stars_os = m_stars_os[good]
 
         star_lines = [
             [
