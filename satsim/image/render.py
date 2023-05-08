@@ -307,6 +307,7 @@ def render_full(
 
         star_x = star_x.numpy()[good]
         star_y = star_y.numpy()[good]
+        m_stars_os = m_stars_os.numpy()[good]
 
         star_lines = [
             [
