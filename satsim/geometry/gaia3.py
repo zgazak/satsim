@@ -7,6 +7,7 @@ from tqdm import tqdm
 from astropy.io import fits
 import pandas as pd
 import numpy as np
+from tqdm.contrib.concurrent import process_map
 
 from satsim.geometry.wcs import get_min_max_ra_dec
 
@@ -39,6 +40,14 @@ def get_zones_from_values(ras, decs, entry):
 
 def tag_from_zones(ra_zone, dec_zone):
     return f"{ra_zone:d}_{dec_zone:d}"
+
+
+def map_single_entry_to_zone(tup_args):
+    ras, decs, entry, fn, idx = tup_args
+    ra_zone, dec_zone = get_zones_from_values(ras, decs, entry)
+    zone_tag = tag_from_zones(ra_zone, dec_zone)
+
+    return (zone_tag, fn, idx)
 
 
 def build_gaia3_index(gaia_path=DEFAULT_GAIA_PATH, ra_zones=60, dec_zones=1800):
@@ -86,20 +95,29 @@ def build_gaia3_index(gaia_path=DEFAULT_GAIA_PATH, ra_zones=60, dec_zones=1800):
         fn = os.path.split(file)[-1]
         _, tbl = fits.open(file)
 
+        entrylist = []
         for count, entry in enumerate(tbl.data):
-            ra_zone, dec_zone = get_zones_from_values(ras, decs, entry)
-            zone_tag = tag_from_zones(ra_zone, dec_zone)
+            entrylist.append((ras, decs, entry, fn, count))
+
+        entries = process_map(
+            map_single_entry_to_zone, entrylist, max_workers=500, chunksize=1000
+        )
+
+        for entry in tqdm(entries, ascii=True, desc="unroll"):
+            zone_tag, fn, count = entry
             if zone_tag not in index_struct["file_zone_map"]:
                 index_struct["file_zone_map"][zone_tag] = {}
-            if fn not in index_struct["file_zone_map"][zone_tag]:
+                index_struct["file_zone_map"][zone_tag][fn] = []
+            elif fn not in index_struct["file_zone_map"][zone_tag]:
                 index_struct["file_zone_map"][zone_tag][fn] = []
 
             # add the row in this table that aligns with the zone
             # satsim can then load this file and quickly extract rows matching the zone_tag
             index_struct["file_zone_map"][zone_tag][fn].append(count)
 
-    with open(os.path.join(gaia_path, "index.json"), "w") as fp:
-        json.dump(index_struct, fp)
+        # just dump this as we go to monitor
+        with open(os.path.join(gaia_path, "index.json"), "w") as fp:
+            json.dump(index_struct, fp)
 
 
 def select_zones(ra_min, ra_max, dec_min, dec_max, zoneInfo):
@@ -262,6 +280,7 @@ def query_by_min_max(
                 )
 
     stars = []
+
     for file in files_to_load:
         _, tbl = fits.open(os.path.join(rootPath, file))
 
