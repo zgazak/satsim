@@ -6,14 +6,14 @@
     PyYAML~=5.1
     matplotlib~=3.3.0
     astropy==5.2
-    astroquery==0.4.1
+    astroquery
     apng~=0.3.4
     scipy~=1.5.4
     tensorflow~=2.2
     tensorflow-addons~=0.11
     skyfield==1.26
     sgp4==2.17
-    poliastro==0.14.0
+    poliastro
     poppy==0.9.1
     diskcache==5.0.3
     pydash~=4.9.0
