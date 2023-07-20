@@ -11,7 +11,7 @@ from tqdm.contrib.concurrent import process_map
 
 from satsim.geometry.wcs import get_min_max_ra_dec
 
-DEFAULT_GAIA_PATH = "/data/share/gaia_fits"
+DEFAULT_GAIA_PATH = "/data/share/gaia_fits_full"
 
 
 def struct_to_dataframe(index_struct):
@@ -115,9 +115,9 @@ def build_gaia3_index(gaia_path=DEFAULT_GAIA_PATH, ra_zones=60, dec_zones=1800):
             # satsim can then load this file and quickly extract rows matching the zone_tag
             index_struct["file_zone_map"][zone_tag][fn].append(count)
 
-        # just dump this as we go to monitor
-        with open(os.path.join(gaia_path, "index.json"), "w") as fp:
-            json.dump(index_struct, fp)
+    # just dump this as we go to monitor
+    with open(os.path.join(gaia_path, "index.json"), "w") as fp:
+        json.dump(index_struct, fp)
 
 
 def select_zones(ra_min, ra_max, dec_min, dec_max, zoneInfo):
@@ -237,6 +237,10 @@ def query_by_los(
     if fliplr:
         cc = width - cc
 
+    import matplotlib.pyplot as plt
+
+    plt.scatter(rr, cc)
+    plt.show()
     return rr, cc, mm, spt
 
 
@@ -264,23 +268,24 @@ def query_by_min_max(
     Returns:
         A `list`, stars within the bounds of input parameters
     """
-    mas_yr_to_rad_sec = 3.154e7 / 4.8481368e-9  # sec/year / rad/mas
+    mas_yr_to_rad_sec = (1 / 3.154e7) * 4.8481368e-9  # year/sec / rad/mas
 
     zoneInfo = json.load(open(os.path.join(rootPath, "index.json"), mode="r"))
 
     zones_to_load = select_zones(ra_min, ra_max, dec_min, dec_max, zoneInfo)
     files_to_load = {}
     for zone in zones_to_load:
-        for file in zoneInfo["file_zone_map"][zone].keys():
-            if file not in files_to_load:
-                files_to_load[file] = zoneInfo["file_zone_map"][zone][file]
-            else:
-                files_to_load[file] = (
-                    files_to_load[file] + zoneInfo["file_zone_map"][zone][file]
-                )
+        if zone in zoneInfo["file_zone_map"]:
+            for file in zoneInfo["file_zone_map"][zone].keys():
+                if file not in files_to_load:
+                    files_to_load[file] = zoneInfo["file_zone_map"][zone][file]
+                else:
+                    files_to_load[file] = (
+                        files_to_load[file] + zoneInfo["file_zone_map"][zone][file]
+                    )
 
     stars = []
-
+    print("applicable files", files_to_load.keys())
     for file in files_to_load:
         _, tbl = fits.open(os.path.join(rootPath, file))
 
@@ -302,7 +307,7 @@ def query_by_min_max(
                     "spt": None if star["SPTYPE"] == "null" else star["SPTYPE"],
                 }
             )
-
+    print("stars calculated")
     return stars
 
 
