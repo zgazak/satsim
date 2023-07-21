@@ -11,7 +11,7 @@ from tqdm.contrib.concurrent import process_map
 
 from satsim.geometry.wcs import get_min_max_ra_dec
 
-DEFAULT_GAIA_PATH = "/data/share/gaia_fits_full"
+DEFAULT_GAIA_PATH = "/data/share/gaia_fits"
 
 
 def struct_to_dataframe(index_struct):
@@ -91,6 +91,7 @@ def build_gaia3_index(gaia_path=DEFAULT_GAIA_PATH, ra_zones=60, dec_zones=1800):
     ras, decs = struct_to_dataframe(index_struct)
 
     for file in tqdm(glob(gaia_path + "/*.fits"), ascii=True, desc="preparing index"):
+        file_struct = {}
         # sep fits name
         fn = os.path.split(file)[-1]
         _, tbl = fits.open(file)
@@ -103,21 +104,26 @@ def build_gaia3_index(gaia_path=DEFAULT_GAIA_PATH, ra_zones=60, dec_zones=1800):
             map_single_entry_to_zone, entrylist, max_workers=500, chunksize=1000
         )
 
-        for entry in tqdm(entries, ascii=True, desc="unroll"):
+        for entry in entries:
             zone_tag, fn, count = entry
             if zone_tag not in index_struct["file_zone_map"]:
                 index_struct["file_zone_map"][zone_tag] = {}
-                index_struct["file_zone_map"][zone_tag][fn] = []
-            elif fn not in index_struct["file_zone_map"][zone_tag]:
-                index_struct["file_zone_map"][zone_tag][fn] = []
+            if fn not in index_struct["file_zone_map"][zone_tag]:
+                index_struct["file_zone_map"][zone_tag][fn] = True
 
             # add the row in this table that aligns with the zone
             # satsim can then load this file and quickly extract rows matching the zone_tag
-            index_struct["file_zone_map"][zone_tag][fn].append(count)
+            if zone_tag not in file_struct:
+                file_struct[zone_tag] = []
+            file_struct[zone_tag].append(count)
 
-    # just dump this as we go to monitor
-    with open(os.path.join(gaia_path, "index.json"), "w") as fp:
-        json.dump(index_struct, fp)
+        # file specific zone indices
+        with open(file.replace(".fits", "_index.json"), "w") as fp:
+            json.dump(file_struct, fp)
+
+        # just dump this as we go to monitor
+        with open(os.path.join(gaia_path, "index.json"), "w") as fp:
+            json.dump(index_struct, fp)
 
 
 def select_zones(ra_min, ra_max, dec_min, dec_max, zoneInfo):
@@ -237,10 +243,6 @@ def query_by_los(
     if fliplr:
         cc = width - cc
 
-    import matplotlib.pyplot as plt
-
-    plt.scatter(rr, cc)
-    plt.show()
     return rr, cc, mm, spt
 
 
@@ -274,19 +276,30 @@ def query_by_min_max(
 
     zones_to_load = select_zones(ra_min, ra_max, dec_min, dec_max, zoneInfo)
     files_to_load = {}
+    file_indices_to_load = {}
     for zone in zones_to_load:
         if zone in zoneInfo["file_zone_map"]:
             for file in zoneInfo["file_zone_map"][zone].keys():
+                # load indices
+                if file not in file_indices_to_load:
+                    file_indices_to_load[file] = json.load(
+                        open(
+                            os.path.join(rootPath, file).replace(
+                                ".fits", "_index.json"
+                            ),
+                            "r",
+                        )
+                    )
                 if file not in files_to_load:
-                    files_to_load[file] = zoneInfo["file_zone_map"][zone][file]
+                    files_to_load[file] = file_indices_to_load[file][zone]
                 else:
                     files_to_load[file] = (
-                        files_to_load[file] + zoneInfo["file_zone_map"][zone][file]
+                        files_to_load[file] + file_indices_to_load[file][zone]
                     )
 
     stars = []
-    print("applicable files", files_to_load.keys())
     for file in files_to_load:
+        # load table
         _, tbl = fits.open(os.path.join(rootPath, file))
 
         # narrow by precomputed index locations of "in zone" stars
