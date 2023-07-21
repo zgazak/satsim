@@ -33,6 +33,7 @@ from satsim.geometry.draw import (
 )
 from satsim.geometry.random import gen_random_points
 from satsim.geometry.sstr7 import query_by_los
+from satsim.geometry.gaia3 import query_by_los as query_gaia_by_los
 from satsim.geometry.sgp4 import create_sgp4
 from satsim.geometry.astrometric import (
     create_topocentric,
@@ -42,7 +43,7 @@ from satsim.geometry.astrometric import (
     GreatCircle,
 )
 from satsim.geometry.twobody import create_twobody
-from satsim.io.hyperspectral import write_frame, set_frame_annotation, init_annotation
+from satsim.io.satnet import write_frame, set_frame_annotation, init_annotation
 from satsim.io.image import save_apng
 from satsim.util import (
     tic,
@@ -56,232 +57,6 @@ from satsim.pipeline import _delta_t
 from satsim import time
 
 logger = logging.getLogger(__name__)
-
-
-def gen_hyper(
-    ssp,
-    eager=True,
-    output_dir="./",
-    input_dir="./",
-    device=None,
-    memory=None,
-    pid=0,
-    output_debug=False,
-):
-    """Generates multiple sets of images. Number of sets is based on the
-    parameters `ssp['sim']['samples']`.
-
-    Examples::
-
-        # load a template json file
-        ssp = load_json('input/config.json')
-
-        # edit some parameters
-        ssp['sim']['samples'] = 50
-        ssp['geometry']['obs']['list']['mv'] = 17.5
-
-        # generate SatNet files to the output directory
-        gen_multi(ssp, eager=True, output_dir='output/')
-
-    Args:
-        ssp: `dict`, static or dynamic satsim configuration and parameters.
-        eager: `boolean`, Has no effect. `True` only.
-        output_dir: `str`, output directory to save SatNet files.
-        input_dir: `str`, typically the input directory of the configuration file.
-        device: `array`, array of GPU device IDs to enable. If `None`, enable all.
-        pid: `int`, an ID to associate this instance to.
-        output_debug: `boolean`, output intermediate debug files.
-    """
-    if eager:
-        configure_eager()
-
-    if device is not None:
-        logger.info(
-            "Starting process id {} on GPU {} with {} MB.".format(
-                pid, device, memory if memory is not None else "MAX"
-            )
-        )
-        configure_single_gpu(device, memory)
-
-    queue = MultithreadedTaskQueue()
-
-    n = ssp["sim"]["samples"] if "samples" in ssp["sim"] else 1
-
-    for set_num in range(n):
-
-        tic("gen_set", set_num)
-
-        logger.info(
-            "Generating set {} of {} on process {}.".format(set_num + 1, n, pid)
-        )
-
-        # transform the original satsim parameters (eval any random sampling)
-        # do a deep copy to preserve the original configuration
-        tssp, issp = transform(copy.deepcopy(ssp), input_dir, with_debug=True)
-
-        # run the transformed parameters
-        dir_name = gen_hyper_images(
-            tssp, eager, output_dir, set_num, queue=queue, output_debug=output_debug
-        )
-
-        # save intermediate transforms
-        save_debug(issp, dir_name)
-
-        logger.info(
-            "Finished set {} of {} in {} sec on process {}.".format(
-                set_num + 1, n, toc("gen_set", set_num), pid
-            )
-        )
-
-    queue.stop()
-    queue.waitUntilEmpty()
-    logger.info("SatSim process {} exiting.".format(pid))
-
-
-def gen_hyper_images(
-    ssp,
-    eager=True,
-    output_dir="./",
-    sample_num=0,
-    output_debug=False,
-    queue=None,
-    set_name=None,
-):
-    """Generates a single set of images.
-
-    Examples::
-
-        # load a template json file
-        ssp = load_json('input/config.json')
-        ssp = transform(copy.deepcopy(ssp), 'input/')
-
-        # generate SatNet files to the output directory
-        gen_images(ssp, eager=True, output_dir='output/')
-
-    Args:
-        ssp: `dict`, static satsim configuration and parameters. Any dynamic
-            parameters should already be transformed.
-        eager: `boolean`, Has no effect. `True` only.
-        output_dir: `str`, output directory to save SatNet files.
-        sample_num: `int`, recorded to annotation files.
-        output_debug: `boolean`, output intermediate debug files.
-        queue: `MultithreadedTaskQueue`, if not None, files will be written.
-        set_name: `str`, sets the directory name to save the images to, if None, is set to current time.
-
-    Returns:
-        A `str`, directory to where the output files are saved.
-    """
-    ssp_orig = copy.deepcopy(ssp)
-
-    (
-        num_frames,
-        exposure_time,
-        h_fpa_os,
-        w_fpa_os,
-        s_osf,
-        y_ifov,
-        x_ifov,
-        a2d_dtype,
-    ) = _parse_sensor_params(ssp)
-
-    dt = datetime.now()
-    if set_name is None:
-        dir_name = os.path.join(output_dir, dt.isoformat().replace(":", "-"))
-        set_name = "sat_{:05d}".format(sample_num)
-
-    # make output dirs
-    os.makedirs(dir_name, exist_ok=True)
-    dir_debug = os.path.join(dir_name, "Debug")
-    if output_debug and not os.path.exists(dir_debug):
-        os.makedirs(dir_debug, exist_ok=True)
-
-    # init annotations
-    meta_data = init_annotation(
-        "dir.name",
-        ["{}.{:04d}.json".format(set_name, x) for x in range(num_frames)],
-        ssp["fpa"]["height"],
-        ssp["fpa"]["width"],
-        y_ifov,
-        x_ifov,
-    )
-
-    for (
-        fpa_digital,
-        frame_num,
-        astrometrics,
-        obs_os_pix,
-        fpa_conv_star,
-        fpa_conv_targ,
-        bg_tf,
-        dc_tf,
-        rn_tf,
-        num_shot_noise_samples,
-        segmentation_array,
-    ) in image_generator(
-        ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
-    ):
-
-        snr = signal_to_noise_ratio(fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf)
-        if num_shot_noise_samples is not None:
-            snr = snr * np.sqrt(num_shot_noise_samples)
-        meta_data = set_frame_annotation(
-            meta_data,
-            frame_num,
-            h_fpa_os,
-            w_fpa_os,
-            obs_os_pix,
-            [20 * s_osf, 20 * s_osf],
-            snr=snr,
-        )
-        if queue is not None:
-            queue.task(
-                write_frame,
-                {
-                    "dir_name": dir_name,
-                    "sat_name": set_name,
-                    "fpa_digital": fpa_digital.numpy(),
-                    "meta_data": copy.deepcopy(meta_data),
-                    "frame_num": frame_num,
-                    "exposure_time": exposure_time,
-                    "time_stamp": dt,
-                    "ssp": ssp_orig,
-                    "show_obs_boxes": ssp["sim"]["show_obs_boxes"],
-                    "astrometrics": astrometrics.copy(),
-                    "save_pickle": ssp["sim"]["save_pickle"],
-                    "dtype": a2d_dtype,
-                    "save_jpeg": ssp["sim"]["save_jpeg"],
-                },
-                tag=dir_name,
-            )
-        if output_debug:
-            with open(
-                os.path.join(dir_debug, "metadata_{}.json".format(frame_num)), "w"
-            ) as jsonfile:
-                json.dump(meta_data, jsonfile, indent=2)
-
-        logger.debug(
-            "Finished frame {} of {} in {} sec.".format(
-                frame_num + 1, num_frames, toc("gen_frame", frame_num)
-            )
-        )
-
-    # write movie
-    def wait_and_run():
-        while True:
-            if queue.has_tag(dir_name):
-                sleep(0.1)
-            else:
-                if ssp["sim"]["save_movie"]:
-                    save_apng(
-                        dirname=os.path.join(dir_name, "AnnotatedImages"),
-                        filename="movie.png",
-                    )
-                return
-
-    if queue is not None:
-        queue.task(wait_and_run, {})
-
-    return dir_name
 
 
 def gen_multi(
@@ -319,8 +94,6 @@ def gen_multi(
         output_debug: `boolean`, output intermediate debug files.
     """
 
-    print("hello")
-    return
     if eager:
         configure_eager()
 
@@ -337,7 +110,6 @@ def gen_multi(
     n = ssp["sim"]["samples"] if "samples" in ssp["sim"] else 1
 
     for set_num in range(n):
-
         tic("gen_set", set_num)
 
         logger.info(
@@ -445,10 +217,22 @@ def gen_images(
         dc_tf,
         rn_tf,
         num_shot_noise_samples,
+        star_boxes,
+        star_lines,
+        FWHM,
     ) in image_generator(
         ssp, output_dir, output_debug, dir_debug, with_meta=True, num_sets=1
     ):
-        snr = signal_to_noise_ratio(fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf)
+        if len(fpa_conv_targ) == 0:
+            snr = signal_to_noise_ratio(
+                fpa_conv_star * 0.0, fpa_conv_star + bg_tf + dc_tf, rn_tf
+            )
+
+        else:
+            snr = signal_to_noise_ratio(
+                fpa_conv_targ, fpa_conv_star + bg_tf + dc_tf, rn_tf
+            )
+
         if num_shot_noise_samples is not None:
             snr = snr * np.sqrt(num_shot_noise_samples)
         meta_data = set_frame_annotation(
@@ -457,8 +241,11 @@ def gen_images(
             h_fpa_os,
             w_fpa_os,
             obs_os_pix,
-            [20 * s_osf, 20 * s_osf],
+            box_size=[2 * FWHM, 2 * FWHM],
             snr=snr,
+            obs_annot=ssp["geometry"]["obs"]["list"],
+            star_annot=star_boxes,
+            star_lines=star_lines,
         )
         if queue is not None:
             queue.task(
@@ -706,7 +493,7 @@ def image_generator(
         star_pe = (
             mv_to_pe(zeropoint, ssp["geometry"]["stars"]["mv"]["bins"]) * exposure_time
         )
-    elif star_mode == "sstr7":
+    elif star_mode in ["gaia3", "sstr7"]:
         star_ra = (
             ssp["geometry"]["stars"]["ra"] if "ra" in ssp["geometry"]["stars"] else 0
         )
@@ -719,6 +506,10 @@ def image_generator(
             else 0
         )
         star_path = ssp["geometry"]["stars"]["path"]
+
+        star_selection_fn = query_by_los
+        if star_mode == "gaia3":
+            star_selection_fn = query_gaia_by_los
 
     if ssp["geometry"]["stars"]["motion"]["mode"] == "affine":
         star_rot_rate = ssp["geometry"]["stars"]["motion"]["rotation"]
@@ -890,7 +681,6 @@ def image_generator(
 
         # site
         if "site" in ssp["geometry"]:
-
             # note: stars will track horizontally where zenith is pointed up. focal plane rotation is simulated with the `rotation` variable
             star_rot = ssp["geometry"]["site"]["gimbal"]["rotation"]
             track_mode = ssp["geometry"]["site"]["track"]["mode"]
@@ -993,7 +783,7 @@ def image_generator(
                 pad_mult=star_pad,
             )
         else:
-            r_stars_os, c_stars_os, m_stars_os = [], [], []
+            r_stars_os, c_stars_os, m_stars_os, spt_stars_os = [], [], [], []
             pe_stars_os = []
 
         # gen psf
@@ -1003,6 +793,7 @@ def image_generator(
         elif ssp["fpa"]["psf"]["mode"] == "gaussian":
             eod = ssp["fpa"]["psf"]["eod"]
             sigma = eod_to_sigma(eod, s_osf)
+            FWHM = 1 + (2.355 * sigma / s_osf)
             psf_os = gen_gaussian(h_sub_pad_os, w_sub_pad_os, sigma)
             save_cache(ssp["fpa"]["psf"], psf_os)
         elif ssp["fpa"]["psf"]["mode"] == "poppy":
@@ -1040,7 +831,6 @@ def image_generator(
             ts_end = time.utc_from_list(tt, t_end)
 
             for i, o in enumerate(obs):
-
                 # TODO support in frame events
                 updated = False
                 if "events" in o:
@@ -1206,7 +996,6 @@ def image_generator(
                         and not math.isnan(rr2[0])
                         and not math.isnan(cc2[0])
                     ):
-
                         if rr0[0] < -h_pad_os and rr2[0] < -h_pad_os:
                             continue
                         elif rr0[0] > h_fpa_pad_os and rr2[0] > h_fpa_pad_os:
@@ -1305,7 +1094,6 @@ def image_generator(
             return orrr, occc, oppp, obs_os_pix, obs_model
 
         if True:  # TODO remove eager
-
             gain_tf = tf.cast(gain, tf.float32)
             bg_tf = tf.cast(bg, tf.float32)
             dc_tf = tf.cast(dc, tf.float32)
@@ -1328,7 +1116,7 @@ def image_generator(
 
                 # refresh catalog stars
                 # TODO should save stars and transform to FPA again on every frame
-                if star_mode == "sstr7" and (
+                if star_mode in ["sstr7", "gaia3"] and (
                     ssp["sim"]["star_catalog_query_mode"] == "frame" or frame_num == 0
                 ):
                     if track_mode is not None:
@@ -1340,7 +1128,14 @@ def image_generator(
                         ) = calculate_star_position_and_motion(
                             ts_start, ts_end, star_rot, track_mode
                         )
-                    r_stars_os, c_stars_os, m_stars_os = query_by_los(
+                    print(star_ra, star_dec)
+
+                    (
+                        r_stars_os,
+                        c_stars_os,
+                        m_stars_os,
+                        spt_stars_os,
+                    ) = star_selection_fn(
                         h_fpa_pad_os,
                         w_fpa_pad_os,
                         y_fov_pad,
@@ -1353,6 +1148,8 @@ def image_generator(
                         flipud=ssp["fpa"]["flip_up_down"],
                         fliplr=ssp["fpa"]["flip_left_right"],
                     )
+
+                    # I'm not sure the * exposire_time is right here, as stars streak?? zg
                     pe_stars_os = mv_to_pe(zeropoint, m_stars_os) * exposure_time
                     t_start_star = 0.0
                     t_end_star = exposure_time
@@ -1434,6 +1231,8 @@ def image_generator(
                         fpa_os_w_targets,
                         fpa_conv_os,
                         fpa_conv_crop,
+                        star_boxes,
+                        star_lines,
                     ) = render_full(
                         h_fpa_os,
                         w_fpa_os,
@@ -1454,19 +1253,36 @@ def image_generator(
                         t_osf,
                         star_rot_rate,
                         star_tran_os,
+                        m_stars_os,
+                        spt_stars_os,
                         render_separate=ssp["sim"]["calculate_snr"],
                         obs_model=obs_model,
                         star_render_mode=ssp["sim"]["star_render_mode"],
                     )
 
+                # add FWHM to star boxes ...:
+                # shift x, y by half, extend width and height by full
+                star_box_shift = 2 * FWHM * np.array([-0.5, -0.5, 1, 1])
+
+                star_boxes = [
+                    list(np.array(box) + star_box_shift.round()) for box in star_boxes
+                ]
+
                 # add noise
-                fpa_conv = (fpa_conv_star + fpa_conv_targ + bg_tf) * gain_tf + dc_tf
+                # no targets:
+                if len(fpa_conv_targ) == 0:
+                    fpa_conv = (fpa_conv_star + bg_tf) * gain_tf + dc_tf
+                else:
+                    fpa_conv = (
+                        fpa_conv_star + tf.math.add_n(fpa_conv_targ) + bg_tf
+                    ) * gain_tf + dc_tf
                 if ssp["sim"]["enable_shot_noise"] is True:
                     fpa_conv_noise = add_photon_noise(
                         fpa_conv, ssp["sim"]["num_shot_noise_samples"]
                     )
                 else:
                     fpa_conv_noise = fpa_conv
+
                 fpa = add_read_noise(fpa_conv_noise, rn, en)
 
                 # analog to digital
@@ -1569,6 +1385,6 @@ def image_generator(
                         "sim"
                     ][
                         "num_shot_noise_samples"
-                    ]
+                    ], star_boxes, star_lines, FWHM
                 else:
                     yield fpa_digital

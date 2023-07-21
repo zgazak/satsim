@@ -60,6 +60,7 @@ def save(
     fpa_np = fpa_copy
     if annotation is not None and show_obs_boxes is True:
         h, w, c = get_shape(fpa_np)
+
         for a in annotation:
             start = (a["box"][1] - pad, a["box"][0] - pad)
             end = (

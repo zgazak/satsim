@@ -10,7 +10,7 @@ from satsim.geometry.wcs import get_min_max_ra_dec
 DEFAULT_SSTR7_PATH = (
     os.environ["SATSIM_SSTR7_PATH"]
     if "SATSIM_SSTR7_PATH" in os.environ
-    else "/workspace/share/sstrc7"
+    else "/data/shared/sstrc7"
 )
 RECORD_LEN = 30
 RECORD_LEN_BYTES = RECORD_LEN * 2
@@ -83,7 +83,6 @@ def select_zone(
     maxRAIndex = 0
 
     def append_zones(minRAIndex, maxRAIndex, bound_func):
-
         for spd in range(minSPDIndex, maxSPDIndex + 1):
             for ra in range(minRAIndex, maxRAIndex + 1):
                 selectZone = {
@@ -140,7 +139,6 @@ def load_zone(currentZone, rootPath):
     filename = os.path.join(rootPath, "s{:04d}.cat".format(currentZone["id"]))
 
     with open(filename, "rb") as file:
-
         zoneBufferFilePos = currentZone["pos"]
         zoneBufferOffset = zoneBufferFilePos * RECORD_LEN_BYTES
         file.seek(zoneBufferOffset)
@@ -266,7 +264,7 @@ def query_by_los(
     if fliplr:
         cc = width - cc
 
-    return rr, cc, mm
+    return rr, cc, mm, None
 
 
 def query_by_min_max(
@@ -429,3 +427,7 @@ def get_star_mv(mv):
         return mv[3]
 
     return 32
+
+
+if __name__ == "__main__":
+    rr, cc, mm = query_by_los(512, 512, 0.5, 0.5, 42.0, 11.0, 32)

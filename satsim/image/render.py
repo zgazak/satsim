@@ -182,6 +182,7 @@ def render_full(
     star_rot_rate,
     star_tran_os,
     m_stars_os,
+    spt_stars_os,
     render_separate=True,
     obs_model=None,
     star_render_mode="transform",
@@ -308,6 +309,7 @@ def render_full(
         star_x = star_x.numpy()[good]
         star_y = star_y.numpy()[good]
         m_stars_os = m_stars_os[good]
+        spt_stars_os = np.array(spt_stars_os)[good]
 
         star_lines = [
             [
@@ -315,9 +317,10 @@ def render_full(
                 float(y),
                 float(x + star_box_wide),
                 float(y + star_box_high),
-                mag,
+                float(mag),
+                spt,
             ]
-            for x, y, mag in zip(star_x, star_y, m_stars_os)
+            for x, y, mag, spt in zip(star_x, star_y, m_stars_os, spt_stars_os)
         ]
 
         if star_box_wide < 0:

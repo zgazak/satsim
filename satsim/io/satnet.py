@@ -28,24 +28,29 @@ def init_annotation(dirname, sequence, height, width, y_ifov, x_ifov):
     """
     data = OrderedDict()
 
-    data['data'] = {
-        'file': {
-            'dirname': dirname,
-            'sequence': sequence
-        },
-        'sensor': {
-            'height': height,
-            'width': width,
-            'iFOVy': y_ifov,
-            'iFOVx': x_ifov
-        },
-        'objects': []
+    data["data"] = {
+        "file": {"dirname": dirname, "sequence": sequence},
+        "sensor": {"height": height, "width": width, "iFOVy": y_ifov, "iFOVx": x_ifov},
+        "objects": [],
     }
 
     return data
 
 
-def set_frame_annotation(data,frame_num,height,width,obs,box_size=None,box_pad=0,filter_ob=False,snr=None):
+def set_frame_annotation(
+    data,
+    frame_num,
+    height,
+    width,
+    obs,
+    box_size=None,
+    box_pad=0,
+    filter_ob=False,
+    snr=None,
+    obs_annot=None,
+    star_annot=None,
+    star_lines=None,
+):
     """Set frame data on annotation object for SatNet.
 
     Args:
@@ -61,15 +66,15 @@ def set_frame_annotation(data,frame_num,height,width,obs,box_size=None,box_pad=0
     Returns:
         A `dict`, the data object for `set_frame_annotation`
     """
+    os_factor = width / data["data"]["sensor"]["width"]
 
-    data['data']['file']['filename'] = 'undefined'
-    data['data']['file']['sequence_id'] = frame_num
-    data['data']['stats'] = {
-        'num_obs_initial': len(obs),
-        'num_obs': len(obs)
-    }
+    data["data"]["file"]["filename"] = "undefined"
+    data["data"]["file"]["sequence_id"] = frame_num
+    data["data"]["stats"] = {"num_obs_initial": len(obs), "num_obs": len(obs)}
 
-    objs = data['data']['objects'] = []
+    objs = data["data"]["objects"] = []
+    data["data"]["star_boxes"] = star_annot if star_annot is not None else []
+    data["data"]["star_lines"] = star_lines if star_lines is not None else []
 
     def is_ob(a, b):
         if a > 1 and b > 1 or a < 0 and b < 0:
@@ -82,8 +87,8 @@ def set_frame_annotation(data,frame_num,height,width,obs,box_size=None,box_pad=0
 
     for o in obs:
         # add 0.5 since the corner of array 0,0, thus middle of first pixel is 0.5,0.5
-        rr_norm = (o['rr'] + 0.5) / height
-        cc_norm = (o['cc'] + 0.5) / width
+        rr_norm = (o["rr"] + 0.5) / height
+        cc_norm = (o["cc"] + 0.5) / width
 
         y_min_true = np.min(rr_norm)
         x_min_true = np.min(cc_norm)
@@ -110,53 +115,84 @@ def set_frame_annotation(data,frame_num,height,width,obs,box_size=None,box_pad=0
         x_center = (x_max + x_min) / 2
 
         if box_size is None:
-            bbox_height = y_max - y_min + box_pad * 2 / height
-            bbox_width = x_max - x_min + box_pad * 2 / width
+            bbox_height = y_max - y_min + box_pad * 2 / height * os_factor
+            bbox_width = x_max - x_min + box_pad * 2 / width * os_factor
         else:
-            bbox_height = (box_size[0] + box_pad * 2) / height
-            bbox_width = (box_size[1] + box_pad * 2) / width
+            bbox_height = (box_size[0] + box_pad * 2) / height * os_factor
+            bbox_width = (box_size[1] + box_pad * 2) / width * os_factor
 
         osnr = []
         opix = []
         if snr is not None:
-            rrr = o['rrr'].astype(int)
-            rcc = o['rcc'].astype(int)
-            upix, uidx = np.unique(np.column_stack((rrr,rcc)), axis=0, return_index=True)
+            rrr = o["rrr"].astype(int)
+            rcc = o["rcc"].astype(int)
+            upix, uidx = np.unique(
+                np.column_stack((rrr, rcc)), axis=0, return_index=True
+            )
             rrr = rrr[uidx]
             rcc = rcc[uidx]
-            uidx = np.logical_and(np.logical_and(rrr >= 0, rrr < snra.shape[0]), np.logical_and(rcc >= 0, rcc < snra.shape[1]))
+            uidx = np.logical_and(
+                np.logical_and(rrr >= 0, rrr < snra.shape[0]),
+                np.logical_and(rcc >= 0, rcc < snra.shape[1]),
+            )
             osnr = snra[rrr[uidx], rcc[uidx]].tolist()
-            osnr = list(map(lambda x: float('%.2f' % (x)), osnr))
+            osnr = list(map(lambda x: float("%.2f" % (x)), osnr))
             opix = upix.tolist()
 
-        objs.append(OrderedDict({
-            'class_name': 'Satellite',
-            'class_id': 1,
-            'y_min': y_min,
-            'x_min': x_min,
-            'y_max': y_max,
-            'x_max': x_max,
-            'y_center': y_center,
-            'x_center': x_center,
-            'bbox_height': bbox_height,
-            'bbox_width': bbox_width,
-            'source': 'satsim',
-            'magnitude': o['mv'],
-            'pe_per_sec': o['pe'],
-            'y_start': rr_norm[0],
-            'x_start': cc_norm[0],
-            'y_mid': y_center_true,
-            'x_mid': x_center_true,
-            'y_end': rr_norm[-1],
-            'x_end': cc_norm[-1],
-            'pixels': opix,
-            'snr': osnr,
-        }))
+        objs.append(
+            OrderedDict(
+                {
+                    "class_name": "Satellite",
+                    "class_id": 1,
+                    "y_min": y_min,
+                    "x_min": x_min,
+                    "y_max": y_max,
+                    "x_max": x_max,
+                    "y_center": y_center,
+                    "x_center": x_center,
+                    "bbox_height": bbox_height,
+                    "bbox_width": bbox_width,
+                    "box": [
+                        int((x_min - bbox_width / 2) * data["data"]["sensor"]["width"]),
+                        int(
+                            (y_min - bbox_height / 2) * data["data"]["sensor"]["height"]
+                        ),
+                        int(bbox_width * data["data"]["sensor"]["width"]),
+                        int(bbox_height * data["data"]["sensor"]["height"]),
+                    ],
+                    "source": "satsim",
+                    "magnitude": o["mv"],
+                    "pe_per_sec": o["pe"],
+                    "y_start": rr_norm[0],
+                    "x_start": cc_norm[0],
+                    "y_mid": y_center_true,
+                    "x_mid": x_center_true,
+                    "y_end": rr_norm[-1],
+                    "x_end": cc_norm[-1],
+                    "pixels": opix,
+                    "snr": osnr,
+                }
+            )
+        )
 
     return data
 
 
-def write_frame(dir_name, sat_name, fpa_digital, meta_data, frame_num, exposure_time, time_stamp, ssp, show_obs_boxes=True, astrometrics=None, save_pickle=False, dtype='uint16', save_jpeg=True):
+def write_frame(
+    dir_name,
+    sat_name,
+    fpa_digital,
+    meta_data,
+    frame_num,
+    exposure_time,
+    time_stamp,
+    ssp,
+    show_obs_boxes=True,
+    astrometrics=None,
+    save_pickle=False,
+    dtype="uint16",
+    save_jpeg=True,
+):
     """Write image and annotation files compatible with SatNet. In addition,
     writes annotated images and SatSim configuration file for reference.
 
@@ -172,14 +208,14 @@ def write_frame(dir_name, sat_name, fpa_digital, meta_data, frame_num, exposure_
         dtype: `string`: Data type to save FITS pixel data as
     """
 
-    file_name = '{}.{:04d}'.format(sat_name, frame_num)
+    file_name = "{}.{:04d}".format(sat_name, frame_num)
 
-    meta_data['data']['file']['dirname'] = Path(dir_name).name
-    meta_data['data']['file']['filename'] = '{}.fits'.format(file_name)
+    meta_data["data"]["file"]["dirname"] = Path(dir_name).name
+    meta_data["data"]["file"]["filename"] = "{}.fits".format(file_name)
 
-    annotation_dir = os.path.join(dir_name, 'Annotations')
-    image_dir = os.path.join(dir_name, 'ImageFiles')
-    annotatedimg_dir = os.path.join(dir_name,'AnnotatedImages')
+    annotation_dir = os.path.join(dir_name, "Annotations")
+    image_dir = os.path.join(dir_name, "ImageFiles")
+    annotatedimg_dir = os.path.join(dir_name, "AnnotatedImages")
 
     if not os.path.exists(annotation_dir):
         os.makedirs(annotation_dir, exist_ok=True)
@@ -189,15 +225,31 @@ def write_frame(dir_name, sat_name, fpa_digital, meta_data, frame_num, exposure_
         os.makedirs(annotatedimg_dir, exist_ok=True)
 
     # save fits
-    fits.save(os.path.join(image_dir, '{}.fits'.format(file_name)), fpa_digital, exposure_time, time_stamp, overwrite=True, astrometrics=astrometrics, dtype=dtype)
+    fits.save(
+        os.path.join(image_dir, "{}.fits".format(file_name)),
+        fpa_digital,
+        exposure_time,
+        time_stamp,
+        overwrite=True,
+        astrometrics=astrometrics,
+        dtype=dtype,
+    )
 
     # save annotation
-    with open(os.path.join(annotation_dir, '{}.json'.format(file_name)), 'w') as json_file:
-        json.dump(meta_data, json_file, indent=None, separators=(',', ':'))
+    with open(
+        os.path.join(annotation_dir, "{}.json".format(file_name)), "w"
+    ) as json_file:
+        json.dump(meta_data, json_file, indent=None, separators=(",", ":"))
 
     # save annotated images
     if save_jpeg:
-        image.save(os.path.join(annotatedimg_dir, '{}.jpg'.format(file_name)), fpa_digital, vauto=True, annotation=meta_data['data']['objects'], show_obs_boxes=show_obs_boxes)
+        image.save(
+            os.path.join(annotatedimg_dir, "{}.jpg".format(file_name)),
+            fpa_digital,
+            vauto=True,
+            annotation=meta_data["data"]["objects"],
+            show_obs_boxes=show_obs_boxes,
+        )
 
     # save sim config
-    save_json(os.path.join(dir_name,'config.json'), ssp, save_pickle=save_pickle)
+    save_json(os.path.join(dir_name, "config.json"), ssp, save_pickle=save_pickle)
