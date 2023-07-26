@@ -20,7 +20,7 @@ RECORD_LEN_BYTES = RECORD_LEN * 2
 def load_index(filename, numRaZones=60, numDecZones=1800):
     """Map SSTRC index file entries to index vector and RA and Dec index maps.
     The SSTRC index files differ from the SSTRC catalog accelerator (index)
-    files in that the only the zone position and length are stored as binary
+    files that the only the zone position and length are stored as binary
     unsigned integers in a single file.
 
     Args:
@@ -264,7 +264,7 @@ def query_by_los(
     if fliplr:
         cc = width - cc
 
-    return rr, cc, mm, None
+    return rr, cc, mm, []
 
 
 def query_by_min_max(

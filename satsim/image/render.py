@@ -309,19 +309,31 @@ def render_full(
         star_x = star_x.numpy()[good]
         star_y = star_y.numpy()[good]
         m_stars_os = m_stars_os[good]
-        spt_stars_os = np.array(spt_stars_os)[good]
+        if len(spt_stars_os) > 0:
+            spt_stars_os = np.array(spt_stars_os)[good]
 
-        star_lines = [
-            [
-                float(x),
-                float(y),
-                float(x + star_box_wide),
-                float(y + star_box_high),
-                float(mag),
-                spt,
+            star_lines = [
+                [
+                    float(x),
+                    float(y),
+                    float(x + star_box_wide),
+                    float(y + star_box_high),
+                    float(mag),
+                    spt,
+                ]
+                for x, y, mag, spt in zip(star_x, star_y, m_stars_os, spt_stars_os)
             ]
-            for x, y, mag, spt in zip(star_x, star_y, m_stars_os, spt_stars_os)
-        ]
+        else:
+            star_lines = [
+                [
+                    float(x),
+                    float(y),
+                    float(x + star_box_wide),
+                    float(y + star_box_high),
+                    float(mag),
+                ]
+                for x, y, mag in zip(star_x, star_y, m_stars_os)
+            ]
 
         if star_box_wide < 0:
             star_x += star_box_wide
