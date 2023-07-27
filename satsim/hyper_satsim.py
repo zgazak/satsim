@@ -1455,15 +1455,19 @@ def image_generator(
                 fpa_digital = tf.stack(fpas, 2)
 
                 if "hyperspectral" in ssp["fpa"]:
-                    plexed_fpa_digital = np.zeros(tuple(fpa_digital.shape[:2]))
-                    offset = ssp["fpa"]["hyperspectral"]["pattern"][0]
-                    chanmap = np.array(ssp["fpa"]["hyperspectral"]["order"])
-                    for _x in range(ssp["fpa"]["hyperspectral"]["pattern"][0]):
-                        for _y in range(ssp["fpa"]["hyperspectral"]["pattern"][1]):
-                            plexed_fpa_digital[_x::offset, _y::offset] = fpa_digital[
-                                :, :, chanmap[_x, _y]
-                            ][_x::offset, _y::offset]
-                    fpa_digital = tf.convert_to_tensor(plexed_fpa_digital)
+                    if ssp["fpa"]["hyperspectral"].get("mode", "bayer") == "bayer":
+                        # bayer filters matrix across the channels, leaving a single frame
+                        plexed_fpa_digital = np.zeros(tuple(fpa_digital.shape[:2]))
+                        offset = ssp["fpa"]["hyperspectral"]["pattern"][0]
+                        chanmap = np.array(ssp["fpa"]["hyperspectral"]["order"])
+                        for _x in range(ssp["fpa"]["hyperspectral"]["pattern"][0]):
+                            for _y in range(ssp["fpa"]["hyperspectral"]["pattern"][1]):
+                                plexed_fpa_digital[
+                                    _x::offset, _y::offset
+                                ] = fpa_digital[:, :, chanmap[_x, _y]][
+                                    _x::offset, _y::offset
+                                ]
+                        fpa_digital = tf.convert_to_tensor(plexed_fpa_digital)
 
                 seg_arr = tf.stack(segs, 3)
                 if with_meta:
