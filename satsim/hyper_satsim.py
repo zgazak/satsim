@@ -522,6 +522,7 @@ def image_generator(
         star_pe = (
             mv_to_pe(zeropoint, ssp["geometry"]["stars"]["mv"]["bins"]) * exposure_time
         )
+
     elif star_mode == "sstr7":
         star_ra = (
             ssp["geometry"]["stars"]["ra"] if "ra" in ssp["geometry"]["stars"] else 0
@@ -810,7 +811,7 @@ def image_generator(
                 pad_mult=star_pad,
             )
         else:
-            r_stars_os, c_stars_os, m_stars_os = [], [], []
+            r_stars_os, c_stars_os, m_stars_os, spt_stars_os = [], [], [], []
             pe_stars_os = []
 
         # gen psf
@@ -1184,7 +1185,7 @@ def image_generator(
                                 ts_start, ts_end, star_rot, track_mode
                             )
                         # this needs to change, ZACH.  supply desired filter?
-                        r_stars_os, c_stars_os, m_stars_os, _ = query_by_los(
+                        r_stars_os, c_stars_os, m_stars_os, spt_stars_os = query_by_los(
                             h_fpa_pad_os,
                             w_fpa_pad_os,
                             y_fov_pad,
@@ -1302,6 +1303,7 @@ def image_generator(
                             star_rot_rate,
                             star_tran_os,
                             m_stars_os,
+                            spt_stars_os,
                             render_separate=ssp["sim"]["calculate_snr"],
                             obs_model=obs_model,
                             star_render_mode=ssp["sim"]["star_render_mode"],
