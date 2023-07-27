@@ -1455,6 +1455,9 @@ def image_generator(
                 fpa_digital = tf.stack(fpas, 2)
 
                 if "hyperspectral" in ssp["fpa"]:
+                    import pdb
+
+                    pdb.set_trace()
                     if ssp["fpa"]["hyperspectral"].get("mode", "bayer") == "bayer":
                         # bayer filters matrix across the channels, leaving a single frame
                         plexed_fpa_digital = np.zeros(tuple(fpa_digital.shape[:2]))
