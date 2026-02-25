@@ -5,64 +5,61 @@ Installation
 ============
 
 
-Stable Release
---------------
-
-To install SatSim:
+From PyPI
+---------
 
 .. code-block:: console
 
-    $ pip3 install satsim
+    $ pip install satsim
 
-Or build python wheel file from `GitHub releases`_:
-
-.. _GitHub releases: https://github.com/ssc-ai/satsim/releases
-
-Then run this command in your terminal from the location of the python wheel
-file.
-
-.. code-block:: console
-
-    $ pip3 install satsim-VERSION-py2.py3-none-any.whl
+Requires Python 3.10+. PyTorch is installed automatically as a dependency.
 
 
-If you don't have `pip`_ installed, this `Python installation guide`_ can guide
-you through the process.
+From Source
+-----------
 
-.. _pip: https://pip.pypa.io
-.. _Python installation guide: http://docs.python-guide.org/en/latest/starting/installation/
-
-
-From Sources
-------------
-
-The sources for SatSim can be downloaded from the `GitHub repo`_.
-
-You can either clone the repository:
+Clone the repository:
 
 .. code-block:: console
 
-    $ git -c clone https://github.com/ssc-ai/satsim.git
+    $ git clone https://github.com/zgazak/satsim.git
+    $ cd satsim
 
-Or download the `tarball`_:
-
-.. code-block:: console
-
-    $ curl -k -OL https://github.com/ssc-ai/satsim/archive/refs/heads/master.zip
-
-Once you have a copy of the source, change directory into SatSim and install
-it with:
+Install in development mode:
 
 .. code-block:: console
 
-    $ python3 setup.py install -or- make install (may require sudo or --user)
+    $ pip install -e ".[dev]"
 
-If you will be modifying code (see contributing page for more details), you
-should install with:
+This installs the package in editable mode along with test dependencies
+(pytest, ruff, mypy).
+
+To also install optional vision dependencies (torchvision, kornia):
 
 .. code-block:: console
 
-    $ python3 setup.py develop -or- make develop
+    $ pip install -e ".[dev,vision]"
 
-.. _GitHub repo: https://github.com/ssc-ai/satsim.git
-.. _tarball: https://github.com/ssc-ai/satsim/archive/refs/heads/master.zip
+
+GPU Support
+-----------
+
+SatSim runs on CPU by default. To use GPU acceleration, ensure you have a
+CUDA-compatible PyTorch installation:
+
+.. code-block:: console
+
+    $ pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+Then select the device at runtime:
+
+.. code-block:: console
+
+    $ satsim run --device cuda:0 config.json
+
+Or in Python:
+
+.. code-block:: python
+
+    import satsim
+    satsim.set_device('cuda:0')
