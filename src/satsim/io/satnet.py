@@ -1,0 +1,445 @@
+from __future__ import division, print_function, absolute_import
+
+import os
+import json
+from pathlib import Path
+from collections import OrderedDict
+
+import numpy as np
+import tifffile
+
+from satsim.io import fits, image
+from satsim.config.loading import save_json
+from satsim.geometry.transform import rotate_and_translate
+
+
+def init_annotation(dirname, sequence, height, width, y_ifov, x_ifov):
+    """Init annotation object for SatNet.
+
+    Args:
+        dirname: `string`, the name of the directory (not full path) the SatNet
+            data files will be saved to.
+        sequence: `int`, sequence
+        height: `int`, image height in pixels
+        width: `int`, image width in pixels
+        y_ifov: `float`, pixel fov in degrees
+        x_ifov: `float`, pixel fov in degrees
+
+    Returns:
+        A `dict`, the data object for `set_frame_annotation`
+    """
+    data = OrderedDict()
+
+    data['data'] = {
+        'file': {
+            'dirname': dirname,
+            'sequence': sequence
+        },
+        'sensor': {
+            'height': height,
+            'width': width,
+            'iFOVy': y_ifov,
+            'iFOVx': x_ifov
+        },
+        'objects': []
+    }
+
+    return data
+
+
+def set_frame_annotation(data,frame_num,height,width,obs,box_size=None,box_pad=0,filter_ob=False,snr=None,star_os_pix=None, metadata={}):
+    """Set frame data on annotation object for SatNet.
+
+    Args:
+        data: `dict`, object returned by `init_annotation`.
+        frame_num: `int`, the current frame number
+        height: `int`, image height in pixels
+        width: `int`, image width in pixels
+        obs: `list`, list of SatSim obs
+        box_size: `[int, int]`, box size in row,col pixels
+        box_pad: `int`, amount of pad to add to each side of box
+        filter_ob: `boolean`, bounds min and max and remove out of bounds
+        snr: `array`, image array with target snr values per pixel
+        star_os_pix: `dict`, dict with SatSim star data
+
+    Returns:
+        A `dict`, the data object for `set_frame_annotation`
+    """
+
+    data['data']['file']['filename'] = 'undefined'
+    data['data']['file']['sequence_id'] = frame_num
+    data['data']['stats'] = {
+        'num_obs_initial': len(obs),
+        'num_obs': len(obs)
+    }
+    data['data']['metadata'] = metadata
+
+    objs = data['data']['objects'] = []
+
+    if snr is not None:
+        snra = np.asarray(snr)
+
+    for o in obs:
+        annotation = _annotate_object(height, width, o['rr'], o['cc'], o['mv'], o['pe'], o.get('id'), filter_ob, box_size, box_pad, "Satellite", 1, object_name=o.get('object_name'), object_id=o.get('object_id'))
+
+        if annotation is None:
+            continue
+
+        osnr = []
+        opix = []
+        if snr is not None:
+            rrr = o['rrr'].astype(int)
+            rcc = o['rcc'].astype(int)
+            upix, uidx = np.unique(np.column_stack((rrr,rcc)), axis=0, return_index=True)
+            rrr = rrr[uidx]
+            rcc = rcc[uidx]
+            mask = np.logical_and(np.logical_and(rrr >= 0, rrr < snra.shape[0]), np.logical_and(rcc >= 0, rcc < snra.shape[1]))
+            osnr = snra[rrr[mask], rcc[mask]].tolist()
+            osnr = list(map(lambda x: float('%.2f' % (x)), osnr))
+            opix = upix[mask].tolist()
+
+        annotation['pixels'] = opix
+        annotation['snr'] = osnr
+        if 'snr_aperture' in o:
+            annotation['snr_aperture'] = _cast_to_float(o['snr_aperture']) if o['snr_aperture'] is not None else None
+        if 'ra_obs' in o and 'dec_obs' in o:
+            annotation['ra_obs'] = _cast_to_float(o['ra_obs'])
+            annotation['dec_obs'] = _cast_to_float(o['dec_obs'])
+            annotation['obs_frame'] = o.get('obs_frame', 'unknown')
+        if 'ra' in o and 'dec' in o:
+            annotation['ra'] = _cast_to_float(o['ra'])
+            annotation['dec'] = _cast_to_float(o['dec'])
+        objs.append(annotation)
+
+    if star_os_pix is not None:
+        star_annotations = _generate_star_annotations(
+            star_os_pix['h'],
+            star_os_pix['w'],
+            star_os_pix['h_pad'],
+            star_os_pix['w_pad'],
+            star_os_pix['rr'],
+            star_os_pix['cc'],
+            star_os_pix['pe'],
+            star_os_pix['mv'],
+            star_os_pix['t_start'],
+            star_os_pix['t_end'],
+            star_os_pix['rot'],
+            star_os_pix['tran'],
+            star_os_pix['ra'],
+            star_os_pix['dec'],
+            star_os_pix['seg_id'],
+            star_os_pix.get('snr_aperture'),
+            star_os_pix['min_mv'],
+            variable=star_os_pix.get('variable'),
+        )
+        objs.extend(star_annotations)
+
+    return data
+
+
+def write_frame(dir_name, sat_name, fpa_digital, meta_data, frame_num, exposure_time, time_stamp, ssp, show_obs_boxes=True, astrometrics=None, save_pickle=False, dtype='uint16', save_jpeg=True, ground_truth=None, ground_truth_min=None, show_star_boxes=False, segmentation=None, fits_compression=None):
+    """Write image and annotation files compatible with SatNet. In addition,
+    writes annotated images and SatSim configuration file for reference.
+
+    Args:
+        dir_name: `string`, directory to save files to
+        sat_name: `string`, satellite name
+        fpa_digital: `array`, image as a numpy array
+        meta_data: `dict`, annotation data generated by `init_annotation`
+        frame_num: `int`, current frame number in set
+        exposure_time: `float`, current frame exposure time in seconds
+        time_stamp: `datetime`, reference time
+        ssp: `dict`: SatSim parameters to be saved to JSON file
+        dtype: `string`: Data type to save FITS pixel data as
+        save_jpeg: `boolean`: specify to save a JPEG annotated image
+        ground_truth: `OrderedDict`: an ordered dictionary of arrays or numbers
+        ground_truth_min: `float`, set any value less than this number in ground_truth to 0
+        show_star_boxes: `boolean`, draw boudning boxes around stars
+        segmentation: `dict`, if not None, segmentation maps
+        fits_compression: `string`: FITS compression type ('none', 'gzip', 'gzip2', 'rice', 'hcompress', 'plio')
+    """
+
+    file_name = '{}.{:04d}'.format(sat_name, frame_num)
+
+    meta_data['data']['file']['dirname'] = Path(dir_name).name
+    meta_data['data']['file']['filename'] = '{}.fits'.format(file_name)
+
+    annotation_dir = os.path.join(dir_name, 'Annotations')
+    image_dir = os.path.join(dir_name, 'ImageFiles')
+    annotatedimg_dir = os.path.join(dir_name,'AnnotatedImages')
+
+    if not os.path.exists(annotation_dir):
+        os.makedirs(annotation_dir, exist_ok=True)
+    if not os.path.exists(image_dir):
+        os.makedirs(image_dir, exist_ok=True)
+    if not os.path.exists(annotatedimg_dir):
+        os.makedirs(annotatedimg_dir, exist_ok=True)
+
+    # save fits
+    fits.save(
+        os.path.join(image_dir, '{}.fits'.format(file_name)),
+        fpa_digital,
+        exposure_time,
+        time_stamp,
+        overwrite=True,
+        astrometrics=astrometrics,
+        dtype=dtype,
+        fits_compression=fits_compression,
+    )
+
+    # save annotation
+    with open(os.path.join(annotation_dir, '{}.json'.format(file_name)), 'w') as json_file:
+        json.dump(meta_data, json_file, indent=None, separators=(',', ':'), default=str)
+
+    # save annotated images
+    if save_jpeg:
+        image.save(os.path.join(annotatedimg_dir, '{}.jpg'.format(file_name)), fpa_digital, vauto=True, annotation=meta_data['data']['objects'], show_obs_boxes=show_obs_boxes, show_star_boxes=show_star_boxes)
+
+    # save sim config
+    save_json(os.path.join(dir_name,'config.json'), ssp, save_pickle=save_pickle)
+
+    # save ground truth
+    if ground_truth is not None:
+
+        keys = ','.join(ground_truth.keys())
+
+        # broadcast scalars
+        def f(x):
+            return x if x.shape == fpa_digital.shape else np.resize(x, fpa_digital.shape)
+
+        ground_truth = np.stack(list(map(f, ground_truth.values())))
+
+        # clip values
+        if ground_truth_min is not None:
+            ground_truth[ground_truth < ground_truth_min] = 0
+
+        tifffile.imwrite(os.path.join(annotation_dir, '{}.tiff'.format(file_name)), np.stack(ground_truth), dtype='float32', bigtiff=True, compression='lzw',
+                         metadata={'ImageDescription': keys})
+
+    if segmentation is not None:
+        for key in segmentation:
+            tifffile.imwrite(os.path.join(annotation_dir, '{}_{}.tiff'.format(file_name, key)), segmentation[key], dtype='uint16', bigtiff=True, compression='lzw')
+
+
+def write_annotation(dir_name, sat_name, meta_data, frame_num, ssp, save_pickle=False):
+    """Write only annotation and configuration files.
+
+    Args:
+        dir_name: `str`, directory to save files.
+        sat_name: `str`, satellite name.
+        meta_data: `dict`, annotation data from :func:`init_annotation`.
+        frame_num: `int`, current frame number in set.
+        ssp: `dict`, SatSim parameters to be saved alongside the annotation.
+        save_pickle: `bool`, pass through to :func:`save_json`.
+    """
+
+    file_name = '{}.{:04d}'.format(sat_name, frame_num)
+
+    meta_data['data']['file']['dirname'] = Path(dir_name).name
+    meta_data['data']['file']['filename'] = 'undefined'
+
+    annotation_dir = os.path.join(dir_name, 'Annotations')
+    if not os.path.exists(annotation_dir):
+        os.makedirs(annotation_dir, exist_ok=True)
+
+    with open(os.path.join(annotation_dir, f'{file_name}.json'), 'w') as json_file:
+        json.dump(meta_data, json_file, indent=None, separators=(',', ':'), default=str)
+
+    save_json(os.path.join(dir_name, 'config.json'), ssp, save_pickle=save_pickle)
+
+
+def _generate_star_annotations(height, width, h_pad_os, w_pad_os, r_stars_os, c_stars_os, pe_stars_os, m_stars_os, t_start_star, t_end_star, star_rot_rate, star_tran_os, ra_stars, dec_stars, seg_id_stars, snr_aperture=None, min_mv=10, box_size=None, box_pad=0, variable=None):
+    """Generates the star annotation data from the SatSim internal star data. Data is typically in oversampled pixel space.
+
+    Args:
+        height: `int`, height of image
+        width: `int`, width of image
+        h_pad_os: `int`, image pad on one side
+        w_pad_os: `int`, image pad on one side
+        r_stars_os: `list`, row positions of stars
+        c_stars_os: `list`, column positions of stars
+        pe_stars_os: `list`, photoelectrons per sec for each star
+        m_stars_os: `list`, magnitude for each star
+        t_start_star: `float`, exposure start time in sec from start of collection
+        t_end_star: `float`, exposure end time in sec from start of collection
+        star_rot_rate: `float`, rotation rate in radians/sec clockwise
+        star_tran_os: `[float,float]`, translation rate in pixel/sec in `[row,col]` order
+        ra_stars: `list`, RA position for each stars
+        dec_star: `list`, declination position for each stars
+        seg_id_stars: `list`, segmentation ids for each star
+        snr_aperture: `list`, aperture SNR for each star
+        min_mv: `float`, minimum magnitude brightness to annotate
+        box_size: `[int, int]`, box size in row,col pixels
+        box_pad: `int`, amount of pad to add to each side of box
+
+    Returns:
+        A `dict`, the star annotations
+    """
+    if seg_id_stars is None:
+        seg_id_stars = np.full_like(r_stars_os, -1, dtype=int)
+
+    m_stars_os = np.asarray(m_stars_os, dtype=np.float32)
+    mask = m_stars_os <= min_mv
+    mask_np = mask
+
+    variable_masked = None
+    if variable is None:
+        variable_masked = [False] * int(np.sum(mask_np))
+    else:
+        variable_masked = np.asarray(variable, dtype=object)[mask_np].tolist()
+    if snr_aperture is None:
+        snr_aperture_masked = [None] * int(np.sum(mask_np))
+    else:
+        snr_aperture_masked = np.asarray(snr_aperture, dtype=object)[mask_np].tolist()
+
+    h_minus_1 = height - 1.0
+    w_minus_1 = width - 1.0
+
+    r_stars_os = np.asarray(r_stars_os, dtype=np.float32)
+    c_stars_os = np.asarray(c_stars_os, dtype=np.float32)
+    pe_stars_os = np.asarray(pe_stars_os, dtype=np.float32)
+    ra_stars = np.asarray(ra_stars, dtype=np.float32)
+    dec_stars = np.asarray(dec_stars, dtype=np.float32)
+    seg_id_stars = np.asarray(seg_id_stars, dtype=np.int32)
+
+    (rr0, cc0) = rotate_and_translate(h_minus_1, w_minus_1, r_stars_os[mask], c_stars_os[mask], t_start_star, star_rot_rate, star_tran_os)
+    (rrm, ccm) = rotate_and_translate(h_minus_1, w_minus_1, r_stars_os[mask], c_stars_os[mask], (t_start_star + t_end_star) * 0.5, star_rot_rate, star_tran_os)
+    (rr1, cc1) = rotate_and_translate(h_minus_1, w_minus_1, r_stars_os[mask], c_stars_os[mask], t_end_star, star_rot_rate, star_tran_os)
+
+    rr = np.stack([rr0, rrm, rr1], axis=1) - h_pad_os
+    cc = np.stack([cc0, ccm, cc1], axis=1) - w_pad_os
+
+    objs = []
+    for r, c, pe, mv, ra, dec, sid, var, snr_ap in zip(
+        rr,
+        cc,
+        pe_stars_os[mask],
+        m_stars_os[mask],
+        ra_stars[mask],
+        dec_stars[mask],
+        seg_id_stars[mask],
+        variable_masked,
+        snr_aperture_masked,
+    ):
+        if np.isnan(r).any() or np.isnan(c).any():
+            continue
+        annotation = _annotate_object(height, width, r, c, mv, float(pe), sid, True, box_size, box_pad, "Star", 2)
+        if annotation is not None:
+            annotation['ra'] = _cast_to_float(ra)
+            annotation['dec'] = _cast_to_float(dec)
+            annotation['variable'] = var
+            if snr_aperture is not None:
+                annotation['snr_aperture'] = _cast_to_float(snr_ap) if snr_ap is not None else None
+            objs.append(annotation)
+
+    return objs
+
+
+def _annotate_object(height, width, rr, cc, mv, pe, seg_id=None, filter_ob=True, box_size=None, box_pad=0, class_name="Satellite", class_id=1, clip_box=False, object_name="", object_id=""):
+    """Generates the star annotation data from the SatSim internal star data. Data is typically in oversampled pixel space.
+
+    Args:
+        height: `int`, height of image
+        width: `int`, width of image
+        rr: `float`, object position as row pixel
+        cc: `float`, object position column pixel
+        mv: `list`, magnitude
+        pe: `list`, photoelectrons per sec
+        seg_id: `int`, segmentation id
+        filter_ob: `boolean`, bounds min and max and remove out of bounds
+        box_size: `[int, int]`, box size in row,col pixels
+        box_pad: `int`, amount of pad to add to each side of box
+        class_name: `str`, class name
+        class_id: `int`, class id
+        clip_box: `boolean, if `filter_ob` is `True`, then clip object positions to inbound only
+
+    Returns:
+        A `dict`, a SatNet formatted annotation
+    """
+    if seg_id is None:
+        seg_id = -1
+
+    rr_norm = (rr + 0.5) / height
+    cc_norm = (cc + 0.5) / width
+
+    y_min_true = np.min(rr_norm)
+    x_min_true = np.min(cc_norm)
+    y_max_true = np.max(rr_norm)
+    x_max_true = np.max(cc_norm)
+
+    lenm1d2 = (len(rr) - 1) / 2.0
+    center_idx = [int(np.floor(lenm1d2)), int(np.ceil(lenm1d2))]
+    y_center_true = (rr_norm[center_idx[0]] + rr_norm[center_idx[1]]) / 2
+    x_center_true = (cc_norm[center_idx[0]] + cc_norm[center_idx[1]]) / 2
+
+    if filter_ob:
+        if _is_out_of_bounds(y_min_true, y_max_true) or _is_out_of_bounds(x_min_true, x_max_true):
+            return None
+        if clip_box:
+            mask = (rr_norm >= 0) & (rr_norm <= 1) & (cc_norm >= 0) & (cc_norm <= 1)
+            rr = rr_norm[mask]
+            cc = cc_norm[mask]
+    else:
+        rr = rr_norm
+        cc = cc_norm
+
+    y_min = np.min(rr_norm)
+    x_min = np.min(cc_norm)
+    y_max = np.max(rr_norm)
+    x_max = np.max(cc_norm)
+    y_center = (y_max + y_min) / 2
+    x_center = (x_max + x_min) / 2
+
+    if box_size is None:
+        bbox_height = y_max - y_min + box_pad * 2 / height
+        bbox_width = x_max - x_min + box_pad * 2 / width
+    else:
+        bbox_height = (box_size[0] + box_pad * 2) / height
+        bbox_width = (box_size[1] + box_pad * 2) / width
+
+    return OrderedDict({
+        'class_name': class_name,
+        'class_id': class_id,
+        'y_min': _cast_to_float(y_min),
+        'x_min': _cast_to_float(x_min),
+        'y_max': _cast_to_float(y_max),
+        'x_max': _cast_to_float(x_max),
+        'y_center': _cast_to_float(y_center),
+        'x_center': _cast_to_float(x_center),
+        'bbox_height': _cast_to_float(bbox_height),
+        'bbox_width': _cast_to_float(bbox_width),
+        'source': 'satsim',
+        'magnitude': _cast_to_float(mv),
+        'pe_per_sec': _cast_to_float(pe),
+        'y_start': _cast_to_float(rr_norm[0]),
+        'x_start': _cast_to_float(cc_norm[0]),
+        'y_mid': _cast_to_float(y_center_true),
+        'x_mid': _cast_to_float(x_center_true),
+        'y_end': _cast_to_float(rr_norm[-1]),
+        'x_end': _cast_to_float(cc_norm[-1]),
+        'seg_id': _cast_to_int(seg_id),
+        'object_name': object_name,
+        'object_id': object_id,
+    })
+
+
+def _cast_to_float(num):
+    if isinstance(num, np.ndarray):
+        return num.astype(float)
+    else:
+        return float(num)
+
+
+def _cast_to_int(num):
+    if isinstance(num, np.ndarray):
+        return num.astype(int)
+    else:
+        return int(num)
+
+
+def _is_out_of_bounds(a, b):
+    """ Check if a normalized coordinate is outside the image """
+    if a > 1 and b > 1 or a < 0 and b < 0:
+        return True
+    else:
+        return False
