@@ -1,0 +1,129 @@
+# SatSim Randomized Example
+#
+# Demonstrates $sample for random parameter variation across scene
+# realizations. Each run produces a unique scene with randomized:
+#   - PSF sharpness
+#   - Exposure time
+#   - Star drift rate
+#   - Number of targets (1-10) with random brightness and velocities
+#   - Per-pixel dark current and gain non-uniformity
+#
+# Run with:
+#   satsim run examples/randomized.yaml -o output/randomized/
+#   satsim run examples/randomized.yaml -o output/randomized/ --seed 42  # reproducible
+
+version: 1
+
+sim:
+  mode: fftconv2p
+  spacial_osf: 3
+  temporal_osf: 100
+  padding: 100
+  samples: 5                 # generate 5 independent scenes
+  save_ground_truth: true    # save ground truth annotations
+
+fpa:
+  height: 512
+  width: 512
+  y_fov: 0.5
+  x_fov: 0.5
+
+  # Per-pixel dark current from a lognormal distribution (models hot pixels)
+  dark_current:
+    $sample: random.lognormal
+    mean: 0.5
+    sigma: 1.0
+    size: [512, 512]
+
+  # Per-pixel gain non-uniformity
+  gain:
+    $sample: random.normal
+    loc: 1.0
+    scale: 0.02
+    size: [512, 512]
+
+  bias: 50
+  zeropoint: 23.5
+
+  a2d:
+    response: linear
+    fwc: 150000
+    gain: 10.0
+    bias: 500
+
+  noise:
+    read: 12
+    electronic: 5
+
+  psf:
+    mode: gaussian
+    eod:
+      $sample: random.uniform
+      low: 0.15
+      high: 0.6
+
+  # Randomly select exposure time from a set of choices
+  time:
+    $sample: random.choice
+    choices:
+      - { exposure: 1.0, gap: 0.2 }
+      - { exposure: 2.0, gap: 0.3 }
+      - { exposure: 5.0, gap: 0.5 }
+
+  num_frames: 8
+
+background:
+  stray:
+    mode: none
+  galactic: 21.5
+
+geometry:
+  stars:
+    mode: bins
+    mv:
+      bins: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      density: [0.04, 0.10, 0.67, 2.48, 5.00, 10.27, 24.33, 35.19, 60.02, 110.1, 180.3, 285.5]
+    motion:
+      mode: affine
+      rotation:
+        $sample: random.uniform
+        low: -0.001
+        high: 0.001
+      translation:
+        - $sample: random.uniform
+          low: -15.0
+          high: 15.0
+        - $sample: random.uniform
+          low: -15.0
+          high: 15.0
+
+  obs:
+    mode: list
+    list:
+      # Generate a random number of targets (1-10), each with random
+      # position, velocity, and brightness
+      $sample: random.list
+      length:
+        $sample: random.randint
+        low: 1
+        high: 10
+      value:
+        mode: line
+        origin:
+          - $sample: random.uniform
+            low: 0.05
+            high: 0.95
+          - $sample: random.uniform
+            low: 0.05
+            high: 0.95
+        velocity:
+          - $sample: random.uniform
+            low: -1.0
+            high: 1.0
+          - $sample: random.uniform
+            low: -1.0
+            high: 1.0
+        mv:
+          $sample: random.uniform
+          low: 10.0
+          high: 20.0

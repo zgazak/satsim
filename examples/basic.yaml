@@ -1,0 +1,83 @@
+# SatSim Basic Example
+#
+# A simple scene: 512x512 FPA, synthetic star field, 3 satellite targets
+# with varying brightness and velocities, 8 frames at 2-second exposure.
+#
+# Run with:
+#   satsim run examples/basic.yaml -o output/basic/
+#
+# Or in Python:
+#   import satsim
+#   for frame in satsim.generate(satsim.load_yaml('examples/basic.yaml'), seed=42):
+#       print(f"Frame {frame.frame_num}: shape={frame.fpa_digital.shape}")
+
+version: 1
+
+sim:
+  mode: fftconv2p           # FFT-based convolution (fast, approximate)
+  spacial_osf: 3            # spatial oversampling factor
+  temporal_osf: 100         # sub-frame steps for motion blur
+  padding: 50               # pixels to pad each side (avoids edge artifacts)
+  samples: 1                # number of independent scene realizations
+
+fpa:
+  height: 512               # image height in pixels
+  width: 512                # image width in pixels
+  y_fov: 0.5                # vertical field of view in degrees
+  x_fov: 0.5                # horizontal field of view in degrees
+  dark_current: 10           # dark current in photoelectrons/pixel/second
+  gain: 1.0                 # pixel response non-uniformity (scalar or image)
+  bias: 50                  # pixel bias in photoelectrons
+  zeropoint: 23.5            # instrument zeropoint magnitude
+  a2d:
+    response: linear         # A/D converter response type
+    fwc: 100000              # full well capacity in photoelectrons
+    gain: 8.0                # analog-to-digital gain (e/DN)
+    bias: 500                # digital readout bias (DN)
+  noise:
+    read: 10                 # RMS read noise in photoelectrons
+    electronic: 5            # RMS electronic noise in photoelectrons
+  psf:
+    mode: gaussian           # PSF model: gaussian, poppy, or none
+    eod: 0.3                 # energy on detector (ensquared energy, 0-1)
+  time:
+    exposure: 2.0            # integration time in seconds
+    gap: 0.5                 # gap between frames in seconds
+  num_frames: 8              # number of frames to generate
+
+background:
+  stray:
+    mode: none               # no stray light
+  galactic: 21.0             # sky background in mag/arcsec^2
+
+geometry:
+  stars:
+    mode: bins               # generate stars from magnitude/density bins
+    mv:
+      bins: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      density: [0.04, 0.10, 0.67, 2.48, 5.00, 10.27, 24.33, 35.19, 60.02, 110.1, 180.3, 285.5]
+    motion:
+      mode: affine
+      rotation: 0.0          # star field rotation rate in rad/sec
+      translation: [3.0, -5.0]  # star drift rate in pixels/sec [row, col]
+
+  obs:
+    mode: list
+    list:
+      # Bright fast-moving target crossing the frame diagonally
+      - mode: line
+        origin: [0.1, 0.1]        # start position (normalized 0-1) [row, col]
+        velocity: [8.0, 12.0]     # velocity in pixels/sec [row, col]
+        mv: 12.0                   # visual magnitude
+
+      # Dim slow target near center
+      - mode: line
+        origin: [0.5, 0.5]
+        velocity: [0.2, -0.3]
+        mv: 17.0
+
+      # Stationary target (e.g., GEO satellite while tracking)
+      - mode: line
+        origin: [0.7, 0.3]
+        velocity: [0.0, 0.0]
+        mv: 15.0
